@@ -937,6 +937,46 @@ pub fn objective_hint(app: &mut App, ctx: &egui::Context) {
 pub fn controls(app: &mut App, ctx: &egui::Context) {
     let mut open = app.controls_open;
     egui::Window::new("Controls").open(&mut open).default_width(470.0).show(ctx, |ui| {
+        ui.heading("From a corner of the substrate");
+        ui.label(RichText::new("All at once: put a corner of the substrate on the crosshair (the live picture's middle) and say which corner it is, as you see the substrate. The camera's orientation, the picture on the screen and the arrows are then set to match you.").weak().size(11.5));
+        let can = app.link.stage_pos().is_some() && app.corner_job.is_none() && app.calib.is_none() && app.flat_job.is_none();
+        let corner_btn = |ui: &mut egui::Ui, app: &mut App, label: &str, name: [f64; 2]| {
+            if ui.add_enabled(can, egui::Button::new(label).min_size(egui::vec2(110.0, 0.0))).clicked() {
+                app.start_corner(name);
+            }
+        };
+        egui::Grid::new("corners").spacing([6.0, 4.0]).show(ui, |ui| {
+            corner_btn(ui, app, "Top left", [1.0, -1.0]);
+            corner_btn(ui, app, "Top right", [-1.0, -1.0]);
+            ui.end_row();
+            corner_btn(ui, app, "Bottom left", [1.0, 1.0]);
+            corner_btn(ui, app, "Bottom right", [-1.0, 1.0]);
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            ui.label("The arrows move");
+            ui.radio_value(&mut app.arrows_move_stage, false, "the view").on_hover_text("right: you look further to the right on the substrate (the stage itself goes left)");
+            ui.radio_value(&mut app.arrows_move_stage, true, "the stage").on_hover_text("right: the stage itself goes to the right (the picture goes left)");
+        });
+        if let Some((_, j)) = &app.corner_job {
+            let j = j.lock().unwrap();
+            ui.label(format!("taking frames {}/{}...", j.done, j.total));
+        }
+        if app.corner.is_some() {
+            ui.label(RichText::new("Which edge of the corner runs left-right for you (on the map, from the corner)?").color(Color32::from_rgb(250, 200, 80)));
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("The red one").color(Color32::from_rgb(240, 90, 70))).clicked() {
+                    app.corner_answer(0);
+                }
+                if ui.button(RichText::new("The blue one").color(Color32::from_rgb(90, 160, 255))).clicked() {
+                    app.corner_answer(1);
+                }
+                if ui.button("Cancel").clicked() {
+                    app.corner = None;
+                }
+            });
+        }
+        ui.separator();
         ui.heading("1. The picture on the screen");
         ui.label(RichText::new("Only how the map is shown: turn and mirror it until it looks the way you like.").weak().size(11.5));
         ui.horizontal(|ui| {

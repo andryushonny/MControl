@@ -4,6 +4,7 @@
 
 mod align;
 mod calib;
+mod corner;
 mod cross;
 mod drawing;
 mod export;
@@ -142,6 +143,12 @@ pub struct App {
     pub keys: keys::Keys,
     pub keys_open: bool,
     pub capturing: Option<keys::Act>,
+    /// learning from a corner of the substrate: its name ([+1 left / -1 right, +1 bottom / -1 top]) and the
+    /// frames being taken; then the corner found, waiting for which edge runs left-right
+    pub corner_job: Option<([f64; 2], Arc<Mutex<corner::Job>>)>,
+    pub corner: Option<([f64; 2], corner::Corner)>,
+    /// the arrows move the stage itself the way they point (else the picture: the view goes that way)
+    pub arrows_move_stage: bool,
     /// a flat field being taken
     pub flat_job: Option<Arc<Mutex<flat::Job>>>,
     pub settings_open: bool,
@@ -219,6 +226,9 @@ impl App {
             keys_open: false,
             capturing: None,
             flat_job: None,
+            corner_job: None,
+            corner: None,
+            arrows_move_stage: stored("arrows_move_stage").as_deref() == Some("true"),
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -379,6 +389,71 @@ impl App {
     pub fn start_flat(&mut self) {
         self.flat_job = Some(flat::start(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um));
         self.message = "flat field: 9 frames around here...".into();
+    }
+
+    /// A corner of the substrate is on the crosshair; `name`: which, as the operator sees the substrate.
+    pub fn start_corner(&mut self, name: [f64; 2]) {
+        self.corner = None;
+        self.corner_job = Some((name, corner::start(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um)));
+        self.message = "corner: 3 frames...".into();
+    }
+
+    fn poll_corner(&mut self) {
+        let Some((name, j)) = &self.corner_job else { return };
+        let r = j.lock().unwrap().result.take();
+        let Some(r) = r else { return };
+        let name = *name;
+        self.corner_job = None;
+        match r {
+            Ok(c) => {
+                if self.proj.optics().m != c.m {
+                    self.proj.optics_mut().m = c.m;
+                    self.proj.optics_mut().profile_path = None;
+                    self.thumbs.clear();
+                    self.changed();
+                }
+                self.corner = Some((name, c));
+                self.follow = true;
+                self.message = "corner found. Which of its two edges (red, blue) runs left-right for you? (Controls)".into();
+                self.controls_open = true;
+            }
+            Err(e) => self.message = format!("corner: {e}"),
+        }
+    }
+
+    /// The operator says which edge of the corner runs left-right for them (0 red, 1 blue): the screen is turned
+    /// and mirrored to show the substrate as they see it, the arrows set the same way.
+    pub fn corner_answer(&mut self, horizontal: usize) {
+        let Some((name, c)) = self.corner.take() else { return };
+        let [r, u] = corner::right_up(&c, name, horizontal);
+        // the screen: right on the screen = right for the operator, up = up (screen y grows downwards)
+        let mut best = (f64::MIN, (false, false, false, 0));
+        for swap in [false, true] {
+            for fx in [false, true] {
+                for fy in [false, true] {
+                    for rot in 0..4 {
+                        let v = picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: fx, flip_y: fy, swap, turn: (rot as f64 * 90.0 + self.proj.sample().turn_deg).to_radians() };
+                        let (a, b) = (v.dir_to_screen(r), v.dir_to_screen(u));
+                        let score = a[0] / geom::len(a) - b[1] / geom::len(b);
+                        if score > best.0 + 1e-9 {
+                            best = (score, (swap, fx, fy, rot));
+                        }
+                    }
+                }
+            }
+        }
+        let (swap, fx, fy, rot) = best.1;
+        (self.swap, self.flip_x, self.flip_y, self.view_rot) = (swap, fx, fy, rot);
+        // the arrows: right / up for the operator; the stage itself moves the other way to the view
+        let sign = if self.arrows_move_stage { -1.0 } else { 1.0 };
+        self.arrow_dirs = Some([geom::mul(r, sign), geom::mul(u, sign)]);
+        (self.arrow_swap, self.arrow_rev_x, self.arrow_rev_y) = (false, false, false);
+        self.taught = [None, None];
+        self.fit = true;
+        self.message = format!(
+            "set from the corner: the screen shows the substrate as you see it; the arrows move {}",
+            if self.arrows_move_stage { "the stage the way they point" } else { "the view the way they point" }
+        );
     }
 
     /// The objective's flat field off (its file stays).
@@ -852,6 +927,7 @@ impl eframe::App for App {
         self.poll_jobs();
         self.poll_calibration();
         self.poll_flat();
+        self.poll_corner();
         if let Some(a) = self.link.state.lock().unwrap().alert.take() {
             self.message = a;
         }
@@ -914,6 +990,7 @@ impl eframe::App for App {
         storage.set_string("arrow_rev_y", self.arrow_rev_y.to_string());
         storage.set_string("arrow_dirs", serde_json::to_string(&self.arrow_dirs).unwrap_or_default());
         storage.set_string("view_rot", self.view_rot.to_string());
+        storage.set_string("arrows_move_stage", self.arrows_move_stage.to_string());
         storage.set_string("keys", self.keys.save());
         storage.set_string("arrow_frac", self.arrow_frac.to_string());
     }

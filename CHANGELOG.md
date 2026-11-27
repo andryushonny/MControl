@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.7
+- *Controls, From a corner of the substrate*: put a corner on the crosshair and say which it is as you see the substrate (top / bottom, left / right). Three frames (here, a little along x, along y) give the camera's orientation against the stage (which of the 8 straight ways the frames agree with; the corner's edges are enough, no texture needed) and where the substrate is from the corner; its two edges are drawn red and blue on the map, you say which runs left-right for you. Then the screen is turned / mirrored to show the substrate as you see it, and the arrows are set the same way: they move the view (default) or the stage itself (a choice there).
+
 ## 0.6.6
 - *Calibrate, Flat field* (also in Settings): the frame darker to its edges (vignetting, uneven light) measured for the objective on now: 9 frames around the current spot, half a field apart; per Bayer plane the median of the frames (the sample's features fall out), smoothed by a polynomial of degree 4, mean 1. Kept per objective (project folder `flat/`); *Flat field off*.
 - With it, live pictures and scanned frames are divided by it on the raw sensor values (before the distortion is taken out); MStitch then gets an even flat field and does not estimate its own.

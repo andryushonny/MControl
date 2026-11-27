@@ -63,6 +63,8 @@ The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, came
 
 **Keys** (top bar): a table of every action and its key; *Change* and press any key (Shift / Ctrl with it if wanted), *None*, *Default*; clashes are red; kept for next time.
 
+**From a corner** (Controls): put a corner of the substrate on the crosshair, say which corner it is (as you see the substrate) and which of its edges (red / blue on the map) runs left-right for you: the camera's orientation, the picture on the screen and the arrows are set from that.
+
 **Controls** (top bar): turn and mirror the picture on the screen to your liking; teach the arrows by watching the stage (it moves a little along X, then Y, and you click where you saw it go), so each arrow moves the stage the way it points for you; find the camera's orientation.
 
 How a session goes:

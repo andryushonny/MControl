@@ -87,6 +87,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         selection(&painter, &view, s, app.focus == Some(s.id));
     }
     live(app, &ctx, &painter, &view, &mut budget);
+    // a corner of the substrate found: its two edges, red and blue, for the operator to say which runs left-right
+    if let Some((_, c)) = &app.corner {
+        let o = app.proj.optics();
+        let at = view.to_screen(c.stage(o));
+        let f = o.field_um();
+        let len = 0.35 * f[0].min(f[1]);
+        for (e, col) in c.edges().iter().zip([Color32::from_rgb(240, 90, 70), Color32::from_rgb(90, 160, 255)]) {
+            let to = view.to_screen(geom::add(c.stage(o), geom::mul(*e, len)));
+            painter.arrow(at, to - at, Stroke::new(4.0, col));
+        }
+        painter.circle_stroke(at, 6.0, Stroke::new(2.0, Color32::from_rgb(250, 200, 80)));
+    }
     // the lattice and the crosses over everything, the live picture included
     if let Some(l) = &sample.lattice {
         lattice(&painter, &view, l, &sample);
