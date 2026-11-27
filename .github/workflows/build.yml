@@ -13,8 +13,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
-      - uses: astral-sh/setup-uv@v6
-      - run: uv run --no-dev --with pytest pytest -q
       - uses: actions/upload-artifact@v4
         with:
           name: mcontrol-windows
@@ -23,6 +21,18 @@ jobs:
             target/release/mc-operator.exe
             target/release/mc-cli.exe
             target/release/mc-viewer.exe
+  # the Python tests on Windows take ~20 min (simulated server): alongside, the release does not wait for them
+  windows-tests:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --no-dev --with pytest pytest -q
   linux:
     runs-on: ubuntu-latest
     steps:
