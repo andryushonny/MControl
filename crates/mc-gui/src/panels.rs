@@ -486,6 +486,17 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 if ui.button("Mirror y").clicked() {
                     changed |= apply([1.0, 0.0, 0.0, -1.0]);
                 }
+                if ui.button("View like the camera").on_hover_text("turn the map so the live picture stands as the camera sees it (frame horizontal)").clicked() {
+                    // the stage direction of the picture's +x, made to point right on the screen
+                    let [a, b, c, d] = app.proj.optics().m;
+                    let det = a * d - b * c;
+                    let ux = [d / det, -c / det];
+                    let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: app.flip_x, flip_y: app.flip_y, turn: 0.0 };
+                    let sd = v.dir_to_screen(ux);
+                    app.proj.sample_mut().turn_deg = -sd[1].atan2(sd[0]).to_degrees();
+                    app.fit = true;
+                    changed = true;
+                }
             });
             ui.end_row();
             ui.label("Lens distortion k1, k2");

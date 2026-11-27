@@ -1,7 +1,7 @@
 # Changelog
 
 ## 0.5.6
-- Camera turned or mirrored against the stage: *Calibrate optics: Measure here* first finds which of the 8 orientations (4 turns, mirrored or not) the frames agree with, then measures scale and distortion; Settings → *Camera orientation*: Turn 90°, Mirror x, Mirror y by hand.
+- Camera turned or mirrored against the stage: *Calibrate optics: Measure here* first finds which of the 8 orientations (4 turns, mirrored or not) the frames agree with, then measures scale and distortion; Settings → *Camera orientation*: Turn 90°, Mirror x, Mirror y by hand, and *View like the camera* (the map turned so the live picture stands upright, frame horizontal).
 - Dark frames on the preview map no longer get holes: a pure black pixel was taken for "no picture" (and showed the frames below through it); dark pixels are now dark.
 - *Clear preview* button: forgets the small pictures of where the camera has been (stitched maps stay).
 
