@@ -1,5 +1,5 @@
 {
   "private": true,
   "description": "Sources of the README diagrams: python render.py",
-  "dependencies": { "roughjs": "^4.6.6", "@fontsource/caveat": "^5.0.0" }
+  "dependencies": { "roughjs": "^4.6.6", "@fontsource/jetbrains-mono": "^5.0.0" }
 }

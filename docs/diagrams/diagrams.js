@@ -11,7 +11,7 @@ D.architecture = () => {
   const wk = B.box(80, 430, 320, 160, "camera worker", "own process\nMindVision SDK\nraw Bayer, no conversion", { fill: "purple" });
   const gd = B.box(440, 430, 270, 160, "guard", "own process\nheartbeat every 250 ms\nsilent 3 s → acts", { fill: "pink" });
   const cam = B.box(80, 690, 320, 130, "Camera MV-SUA502C", "USB 3 · 2592 × 1944", { fill: "grey" });
-  const ctl = B.box(440, 690, 320, 130, "Controller ATR8300", "USB serial (COM), known commands only\nstage · light · laser · TEC", { fill: "grey" });
+  const ctl = B.box(440, 690, 320, 130, "Controller ATR8300", "USB serial (COM)\nknown commands only\nstage · light · laser · TEC", { fill: "grey" });
   B.arrow([240, 690], [240, 590], { label: "USB 3", dx: 42, dy: 0 });
   B.arrow([240, 430], [240, 355], { label: "frames (pipe)", dx: 72, dy: 0 });
   B.arrow([735, 355], [735, 690], { both: true });
@@ -54,7 +54,7 @@ D.snap = () => {
   }
   B.text(560, 500, "frames during the move or the settle: never used", { size: 21, color: "#c0392b" });
   B.arrow([1002, 525], [1070, 300], { label: "frame 108\n+ xyz at mid-exposure", anchor: "start", dx: 8, dy: 30, color: "#2f7d32" });
-  B.arrow([1090, 300], [1150, 180], { label: "reply {seq: 108}, pixels on the data link", anchor: "start", dx: 14, dy: 10 });
+  B.arrow([1090, 300], [1150, 180], { label: "reply {seq: 108}\npixels on the data link", anchor: "start", dx: 14, dy: 10 });
   B.box(230, 670, 1230, 90, "Every frame carries",
     "xyz_um (stage at mid-exposure) · moving · settled_ms · t_exp_start / t_exp_end (server clock) → t_local_ns on PC 2", { fill: "blue", size: 25, bodySize: 22 });
 };
@@ -70,8 +70,9 @@ D.access = () => {
   const d5 = B.diamond(1040, 650, 240, 140, "control\nfree?");
   B.arrow([260, 210], d1.l); B.arrow(d1.r, d2.l, { label: "yes" }); B.arrow(d2.r, d3.l, { label: "yes" });
   B.arrow(d3.b, d4.t, { label: "yes", dx: 26, dy: 0 }); B.arrow(d4.b, d5.t, { label: "yes", dx: 26, dy: 0 });
-  const no = (from, to, code, text, ly) => {
-    B.arrow(from, to, { label: "no", color: "#c0392b", dy: ly ?? -16 });
+  const no = (from, to) => {   // label beside a vertical arrow, above a horizontal one
+    const vertical = Math.abs(to[0] - from[0]) < 5;
+    B.arrow(from, to, { label: "no", color: "#c0392b", dx: vertical ? 22 : 0, dy: vertical ? 0 : -16 });
   };
   const e1 = B.box(340, 360, 200, 90, "E111", "not on the list", { fill: "red", bodySize: 18, size: 26 });
   const e2 = B.box(640, 360, 200, 90, "E112", "no entry", { fill: "red", bodySize: 18, size: 26 });
