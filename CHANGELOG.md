@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.3
+- A new selection goes to the top of the list; the list is the drawing priority, top drawn over the rest (map and DXF).
+
 ## 0.5.2
 - Light and laser: F2 light on/off, Shift+F3 laser on, F3 or Space off; buttons in the top bar, level and power in Settings; LASER ON in red in the status bar; Stop also switches the laser off.
 - Keyboard shortcuts work after a click on the map (the map no longer keeps the keyboard).

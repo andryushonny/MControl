@@ -149,7 +149,7 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
         ui.separator();
         ui.horizontal(|ui| {
             ui.heading("Selections");
-            ui.label(RichText::new("top is drawn on top").weak());
+            ui.label(RichText::new("higher = drawn on top; new ones go first").weak());
         });
         if app.proj.sample().selections.is_empty() {
             ui.label(RichText::new("Select tool (S): click two corners on the map.").weak());

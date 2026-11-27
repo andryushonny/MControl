@@ -261,7 +261,7 @@ impl Project {
         let n = self.sample().selections.len();
         let color = COLORS[(id as usize - 1) % COLORS.len()];
         let objective = self.optics().objective.clone();
-        self.sample_mut().selections.push(Selection {
+        self.sample_mut().selections.insert(0, Selection {
             id,
             name: format!("Selection {}", n + 1),
             rect,
