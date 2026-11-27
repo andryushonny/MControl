@@ -12,21 +12,35 @@ use mc_proto::errors::{McError, McResult};
 use mc_proto::{read_msg_max, write_frame, write_json, DISCOVERY_ASK, K_JSON, MAX_CMD};
 use serde_json::{json, Value};
 use std::io::BufWriter;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Role {
     Operator,
     Viewer,
+    /// A helper of the operator (e.g. MStitch on the operator's PC): commands go into the operator's queue.
+    Assistant,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Operator => "operator",
+            Role::Viewer => "viewer",
+            Role::Assistant => "assistant",
+        }
+    }
 }
 
 pub struct Session {
     pub id: String,
     pub role: Role,
+    pub lease_key: String,               // an operator's key: an assistant shows it to join
+    pub partner: Option<Arc<Session>>,   // an assistant's operator
     pub name: String,
     pub addr: SocketAddr,
     writer: Mutex<TcpStream>,
@@ -60,6 +74,7 @@ pub fn who(role: Role, name: &str, addr: &SocketAddr) -> String {
     let (c, r) = match role {
         Role::Operator => (GREEN, "operator"),
         Role::Viewer => (BLUE, "viewer"),
+        Role::Assistant => (GREEN, "assistant"),
     };
     format!("{} {} {}", paint(c, r), paint(BOLD, name), paint(DIM, &addr.ip().to_string()))
 }
@@ -93,8 +108,24 @@ pub fn listen(bind: IpAddr, port: u16) -> McResult<(TcpListener, u16)> {
     Err(McError::new("E120", format!("{bind}:{port}..{}: {last}", port.saturating_add(9))))
 }
 
+/// A command of the operator (or its assistant) waiting its turn.
+pub struct Job {
+    n: u64,
+    sess: Arc<Session>,
+    id: Value,
+    cmd: String,
+    v: Value,
+}
+
 pub struct Server {
     refused: Mutex<HashMap<IpAddr, u64>>,
+    /// One queue for everything that changes the instrument: commands run one after another, in the order
+    /// they came, each with a number `n`; a chain runs as one, nothing gets between its steps.
+    queue: Mutex<VecDeque<Job>>,
+    queue_cv: Condvar,
+    next_n: AtomicU64,
+    cancel: AtomicU64, // bumped by stop: the running chain ends, queued commands are dropped
+    history: Mutex<VecDeque<Value>>,
     pub stage: Arc<Stage>,
     pub cam: Arc<Camera>,
     pub hub: Arc<Hub>,
@@ -123,8 +154,9 @@ fn f3(v: &Value, k: &str) -> Option<f64> {
 
 impl Server {
     pub fn new(stage: Arc<Stage>, cam: Arc<Camera>, hub: Arc<Hub>, cfg: Cfg) -> Arc<Server> {
-        Arc::new(Server { refused: Mutex::new(HashMap::new()), stage, cam, hub, sessions: Mutex::new(Vec::new()),
-                          lease: Mutex::new(None), cfg, started: now_ns() })
+        Arc::new(Server { refused: Mutex::new(HashMap::new()), queue: Mutex::new(VecDeque::new()), queue_cv: Condvar::new(),
+                          next_n: AtomicU64::new(0), cancel: AtomicU64::new(0), history: Mutex::new(VecDeque::new()),
+                          stage, cam, hub, sessions: Mutex::new(Vec::new()), lease: Mutex::new(None), cfg, started: now_ns() })
     }
 
     /// Refuse a client before it gets a session; logged once a minute per address (scanners stay quiet).
@@ -157,6 +189,8 @@ impl Server {
         std::thread::Builder::new().name("discovery".into()).spawn(move || s.discovery())?;
         let s = self.clone();
         std::thread::Builder::new().name("watchdog".into()).spawn(move || s.watchdog())?;
+        let s = self.clone();
+        std::thread::Builder::new().name("queue".into()).spawn(move || s.executor())?;
         let s = self.clone();
         std::thread::Builder::new().name("telemetry".into()).spawn(move || s.telemetry())?;
         for c in cl.incoming().flatten() {
@@ -216,12 +250,16 @@ impl Server {
             let _ = write_json(&mut w, &err(&id, &McError::new("E104", "")));
             return;
         }
-        let role = if hello["role"] == "operator" { Role::Operator } else { Role::Viewer };
+        let role = match hello["role"].as_str() {
+            Some("operator") => Role::Operator,
+            Some("assistant") => Role::Assistant,
+            _ => Role::Viewer,
+        };
         let name = hello["name"].as_str().unwrap_or("?").chars().filter(|c| !c.is_control()).take(40).collect::<String>();
         let a = &self.cfg.access;
         let refusal = if !a.token_ok(hello["token"].as_str().unwrap_or("")) {
             Some(McError::new("E112", ""))
-        } else if role == Role::Operator && !a.may_operate(&addr.ip()) {
+        } else if role != Role::Viewer && !a.may_operate(&addr.ip()) {
             Some(McError::new("E113", addr.ip().to_string()))
         } else if role == Role::Viewer
             && self.sessions.lock().unwrap().iter().filter(|s| s.role == Role::Viewer).count() >= self.cfg.max_viewers
@@ -230,6 +268,15 @@ impl Server {
         } else {
             None
         };
+        // an assistant joins the operator now in control: with its key, or from the operator's own PC
+        let partner = if role == Role::Assistant { self.holder() } else { None };
+        let refusal = refusal.or_else(|| {
+            (role == Role::Assistant
+                && !partner.as_ref().map_or(false, |h| {
+                    hello["join"].as_str().map_or(h.addr.ip() == addr.ip(), |k| a.token_eq(k, &h.lease_key))
+                }))
+            .then(|| McError::new("E115", ""))
+        });
         if let Some(e) = refusal {
             self.refuse(&mut w, &id, e, who(role, &name, &addr));
             return;
@@ -237,6 +284,8 @@ impl Server {
         let sess = Arc::new(Session {
             id: random_id(),
             role,
+            lease_key: random_id(),
+            partner,
             name,
             addr,
             writer: Mutex::new(c),
@@ -261,8 +310,11 @@ impl Server {
         }
         self.sessions.lock().unwrap().push(sess.clone());
         info!("NET", "{}  connected", sess.who());
-        sess.send(&ok(&id, json!({"session": sess.id, "role": if role == Role::Operator { "operator" } else { "viewer" },
-            "server": self.info(), "t_server": now_ns()})));
+        let mut reply = json!({"session": sess.id, "role": role.name(), "server": self.info(), "t_server": now_ns()});
+        if role == Role::Operator {
+            reply["lease_key"] = json!(sess.lease_key); // to hand to an assistant on another PC
+        }
+        sess.send(&ok(&id, reply));
         self.event("client", client_json(&sess, "connected")); // after the reply: hello's answer comes first
         if role == Role::Operator {
             self.event("operator", json!({"name": sess.name, "addr": sess.addr.ip().to_string()}));
@@ -378,6 +430,44 @@ impl Server {
                 }
                 return;
             }
+            "history" => {
+                // what was done, in order: commands with their numbers, results, errors; messages
+                let since = v["since"].as_u64().unwrap_or(0);
+                let limit = v["limit"].as_u64().unwrap_or(100).min(2000) as usize;
+                let h = self.history.lock().unwrap();
+                let list: Vec<Value> = h.iter().filter(|e| e["n"].as_u64().unwrap_or(0) > since).cloned().collect();
+                let start = list.len().saturating_sub(limit);
+                let queued: Vec<Value> = self.queue.lock().unwrap().iter()
+                    .map(|j| json!({"n": j.n, "by": j.sess.name, "cmd": j.cmd, "args": cmd_args_json(&j.v)})).collect();
+                sess.send(&ok(&id, json!({"history": list[start..].to_vec(), "queued": queued})));
+                return;
+            }
+            "send" => {
+                // a message to other clients (e.g. MStitch <-> the operator's script): "operator", "all", or a name
+                let to = v["to"].as_str().unwrap_or("").to_string();
+                let n = self.next_n.fetch_add(1, Ordering::SeqCst) + 1;
+                let holder = self.holder();
+                let targets: Vec<Arc<Session>> = self.sessions.lock().unwrap().iter()
+                    .filter(|t| !Arc::ptr_eq(t, sess))
+                    .filter(|t| match to.as_str() {
+                        "all" => true,
+                        "operator" => holder.as_ref().map_or(false, |h| Arc::ptr_eq(h, t)),
+                        name => t.name == name,
+                    })
+                    .cloned().collect();
+                let msg = json!({"event": "message", "n": n, "from": sess.name, "role": sess.role.name(), "to": to,
+                                 "data": v["data"], "reply_to": v["reply_to"], "t_server": now_ns()});
+                for t in &targets {
+                    t.send(&msg);
+                }
+                let mut rec = msg.clone();
+                rec["delivered"] = json!(targets.len());
+                rec["t_wall_ms"] = json!(mc_proto::clock::wall_ms());
+                self.remember(&rec);
+                crate::debug!("NET", "Message #{n} {} -> {to}: {} recipients", sess.name, targets.len());
+                sess.send(&ok(&id, json!({"n": n, "delivered": targets.len()})));
+                return;
+            }
             "stream" => {
                 // pause / resume the live stream on this client's data connection (snaps still arrive)
                 if let Some(ob) = sess.outbox.lock().unwrap().clone() {
@@ -406,46 +496,144 @@ impl Server {
             }
             _ => {}
         }
-        // everything else changes the instrument: operator with the lease only
-        let holds = self.holder().map(|h| Arc::ptr_eq(&h, sess)).unwrap_or(false);
-        if !holds {
+        // everything else changes the instrument: the operator holding control, or its assistant
+        if !self.holds(sess) {
             let code = if sess.role == Role::Viewer { "E102" } else { "E103" };
             sess.send(&err(&id, &McError::new(code, cmd.clone())));
             return;
         }
-        if cmd == "stop" {
-            self.stage.stop();
-            self.report(sess, &cmd, &v, Ok(&json!({})), 0.0);
-            sess.send(&ok(&id, json!({})));
-            return;
-        }
-        if cmd == "release" {
-            *self.lease.lock().unwrap() = None;
-            self.report(sess, &cmd, &v, Ok(&json!({})), 0.0);
-            self.event("operator", json!({"name": null}));
-            sess.send(&ok(&id, json!({})));
-            return;
-        }
-        if !is_read(&cmd) {
-            self.event("command", json!({"state": "started", "by": sess.name, "cmd": cmd, "args": cmd_args_json(&v)}));
-        }
-        // long jobs: on their own thread, so `stop` and pings keep flowing
-        let s = self.clone();
-        let sess = sess.clone();
-        std::thread::spawn(move || {
-            let t0 = now_ns();
-            let r = s.run_cmd(&sess, &cmd, &v);
-            match r {
-                Ok(x) => {
-                    s.report(&sess, &cmd, &v, Ok(&x), (now_ns() - t0) as f64 / 1e6);
-                    sess.send(&ok(&id, x))
+        match cmd.as_str() {
+            "stop" => {
+                // not queued: at once. The stage stops, the running chain ends, waiting commands are dropped
+                self.stage.stop();
+                self.cancel.fetch_add(1, Ordering::SeqCst);
+                let dropped: Vec<Job> = self.queue.lock().unwrap().drain(..).collect();
+                let n = self.next_n.fetch_add(1, Ordering::SeqCst) + 1;
+                self.report(sess, &cmd, &v, Ok(&json!({"dropped": dropped.len()})), 0.0, n);
+                for j in dropped {
+                    let e = McError::new("E116", format!("by {}", sess.name));
+                    self.report(&j.sess, &j.cmd, &j.v, Err(&e), 0.0, j.n);
+                    j.sess.send(&err(&j.id, &e));
                 }
-                Err(e) => {
-                    s.report(&sess, &cmd, &v, Err(&e), (now_ns() - t0) as f64 / 1e6);
+                sess.send(&ok(&id, json!({"n": n})));
+                return;
+            }
+            "release" if sess.role == Role::Operator => {
+                *self.lease.lock().unwrap() = None;
+                let n = self.next_n.fetch_add(1, Ordering::SeqCst) + 1;
+                self.report(sess, &cmd, &v, Ok(&json!({})), 0.0, n);
+                self.event("operator", json!({"name": null}));
+                sess.send(&ok(&id, json!({"n": n})));
+                return;
+            }
+            "chain" => {
+                let steps = v["steps"].as_array().map(|a| a.len()).unwrap_or(0);
+                let bad = v["steps"].as_array().and_then(|a| {
+                    a.iter().map(|st| st["cmd"].as_str().unwrap_or("")).find(|c| matches!(*c, "" | "stop" | "release" | "chain"))
+                });
+                if steps == 0 || steps > 500 || bad.is_some() {
+                    let e = McError::new("E101", "chain: 1..500 steps, each a command other than stop / release / chain");
                     sess.send(&err(&id, &e));
+                    return;
                 }
             }
-        });
+            _ => {}
+        }
+        if is_read(&cmd) {
+            // reads change nothing: not queued, so a long scan does not hold them up
+            let (s, sess) = (self.clone(), sess.clone());
+            std::thread::spawn(move || match s.run_cmd(&sess, &cmd, &v) {
+                Ok(x) => sess.send(&ok(&id, x)),
+                Err(e) => sess.send(&err(&id, &e)),
+            });
+            return;
+        }
+        let mut q = self.queue.lock().unwrap();
+        if q.len() >= 1000 {
+            sess.send(&err(&id, &McError::new("E117", "1000 waiting")));
+            return;
+        }
+        let n = self.next_n.fetch_add(1, Ordering::SeqCst) + 1;
+        let ahead = q.len();
+        q.push_back(Job { n, sess: sess.clone(), id, cmd: cmd.clone(), v: v.clone() });
+        drop(q);
+        self.queue_cv.notify_all();
+        self.event("command", json!({"state": "queued", "n": n, "by": sess.name, "cmd": cmd, "args": cmd_args_json(&v), "ahead": ahead}));
+    }
+
+    /// The operator, or an assistant whose operator still holds control.
+    fn holds(&self, sess: &Arc<Session>) -> bool {
+        let Some(h) = self.holder() else { return false };
+        match sess.role {
+            Role::Operator => Arc::ptr_eq(&h, sess),
+            Role::Assistant => sess.partner.as_ref().map_or(false, |p| Arc::ptr_eq(&h, p)),
+            Role::Viewer => false,
+        }
+    }
+
+    /// Runs the queue: one command at a time, in order. Replies carry `n`, so the client can match them.
+    fn executor(self: Arc<Self>) {
+        loop {
+            let job = {
+                let mut q = self.queue.lock().unwrap();
+                loop {
+                    if let Some(j) = q.pop_front() {
+                        break j;
+                    }
+                    q = self.queue_cv.wait(q).unwrap();
+                }
+            };
+            if !job.sess.alive.load(Ordering::Relaxed) || !self.holds(&job.sess) {
+                let e = McError::new("E103", "control changed hands before its turn");
+                self.report(&job.sess, &job.cmd, &job.v, Err(&e), 0.0, job.n);
+                job.sess.send(&err(&job.id, &e));
+                continue;
+            }
+            let cancel = self.cancel.load(Ordering::SeqCst);
+            self.event("command", json!({"state": "started", "n": job.n, "by": job.sess.name, "cmd": job.cmd, "args": cmd_args_json(&job.v)}));
+            let t0 = now_ns();
+            let r = if job.cmd == "chain" { self.run_chain(&job, cancel) } else { self.run_cmd(&job.sess, &job.cmd, &job.v) };
+            let ms = (now_ns() - t0) as f64 / 1e6;
+            self.report(&job.sess, &job.cmd, &job.v, r.as_ref(), ms, job.n);
+            match r {
+                Ok(mut x) => {
+                    if x.is_object() {
+                        x["n"] = json!(job.n);
+                    }
+                    job.sess.send(&ok(&job.id, x))
+                }
+                Err(e) => {
+                    let mut m = err(&job.id, &e);
+                    m["n"] = json!(job.n);
+                    job.sess.send(&m)
+                }
+            }
+        }
+    }
+
+    /// The steps of a chain, back to back. A failed step ends it (unless stop_on_error is false); stop ends it too.
+    fn run_chain(&self, job: &Job, cancel: u64) -> McResult<Value> {
+        let steps = job.v["steps"].as_array().cloned().unwrap_or_default();
+        let stop_on_error = job.v["stop_on_error"].as_bool().unwrap_or(true);
+        let mut results = Vec::new();
+        for (i, st) in steps.iter().enumerate() {
+            if self.cancel.load(Ordering::SeqCst) != cancel {
+                return Err(McError::new("E116", format!("at step {} of {}", i + 1, steps.len())));
+            }
+            let c = st["cmd"].as_str().unwrap_or("");
+            let t0 = now_ns();
+            let r = self.run_cmd(&job.sess, c, st);
+            let mut v = st.clone();
+            v["chain"] = json!(job.n);
+            v["step"] = json!(i + 1);
+            self.report(&job.sess, c, &v, r.as_ref(), (now_ns() - t0) as f64 / 1e6, job.n);
+            match r {
+                Ok(x) => results.push(x),
+                Err(e) if stop_on_error => return Err(McError::new(e.code, format!("step {} of {} ({c}): {}", i + 1, steps.len(), e.detail))),
+                Err(e) => results.push(json!({"error": e.json()})),
+            }
+        }
+        Ok(json!({"results": results}))
     }
 
     fn run_cmd(&self, sess: &Arc<Session>, cmd: &str, v: &Value) -> McResult<Value> {
@@ -461,6 +649,18 @@ impl Server {
                 self.stage.call(move |w| w.move_to(t, gen))
             }
             "snap" => self.snap(sess, v, gen),
+            "wait" => {
+                // a pause in the queue (e.g. let the sample settle); stop ends it
+                let cancel = self.cancel.load(Ordering::SeqCst);
+                let end = now_ns() + (f3(v, "ms").unwrap_or(0.0).clamp(0.0, 60_000.0) * 1e6) as u64;
+                while now_ns() < end {
+                    if self.cancel.load(Ordering::SeqCst) != cancel {
+                        return Err(McError::new("E116", ""));
+                    }
+                    std::thread::sleep(Duration::from_millis(10).min(Duration::from_nanos(end - now_ns())));
+                }
+                Ok(json!({}))
+            }
             "zero" => self.stage.call(|w| w.set_zero()),
             "confirm" => self.stage.call(|w| w.confirm()),
             "light" => {
@@ -521,7 +721,7 @@ impl Server {
             list.iter()
                 .map(|s| {
                     let ob = s.outbox.lock().unwrap().clone();
-                    json!({"name": s.name, "role": if s.role == Role::Operator {"operator"} else {"viewer"},
+                    json!({"name": s.name, "role": s.role.name(),
                            "addr": s.addr.ip().to_string(), "rtt_us": s.rtt_us.load(Ordering::Relaxed),
                            "frames": ob.as_ref().map(|o| o.sent_frames.load(Ordering::Relaxed)),
                            "dropped": ob.as_ref().map(|o| o.dropped.load(Ordering::Relaxed))})
@@ -634,38 +834,74 @@ impl Server {
 
     /// A finished operator command, said once in one shape: a log line for the console and a `command` event
     /// for every client: what was asked, what came out (or the error), how long it took, by whom.
-    fn report(&self, sess: &Session, cmd: &str, v: &Value, r: Result<&Value, &McError>, ms: f64) {
+    fn report(&self, sess: &Session, cmd: &str, v: &Value, r: Result<&Value, &McError>, ms: f64, n: u64) {
         if is_read(cmd) {
             return;
         }
-        let args = cmd_args_json(v);
-        let by = paint(DIM, &format!("{ms:.0} ms  by {}", sess.name));
-        let r = match r {
-            Ok(x) => x,
-            Err(e) => {
-                crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{cmd} {}  {e}  {by}", cmd_args(v)));
-                self.event("command", json!({"state": "failed", "by": sess.name, "cmd": cmd, "args": args, "error": e.json(), "ms": ms.round()}));
-                return;
+        // a step of a chain is "#12.3": chain 12, step 3
+        let tag_n = match v["step"].as_u64() {
+            Some(st) => format!("#{n}.{st}"),
+            None => format!("#{n}"),
+        };
+        let mut args = cmd_args_json(v);
+        if let Some(o) = args.as_object_mut() {
+            o.remove("chain");
+            o.remove("step");
+            if cmd == "chain" {
+                o.remove("steps"); // each step is reported on its own
             }
-        };
-        let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
-        let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
-            format!("at ({p})")
-        } else if let Some(seq) = r.get("seq") {
-            format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
-        } else {
-            String::new()
-        };
-        let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
-        let line = [format!("{cmd} {}", cmd_args(v)), if out.is_empty() { out.clone() } else { paint(BOLD, &out) }, by];
-        crate::log::log(level, cmd_tag(cmd), &line.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join("  "));
-        let mut result = r.clone();
-        if let Some(o) = result.as_object_mut() {
-            o.remove("id");
-            o.remove("ok");
         }
-        self.event("command", json!({"state": "done", "by": sess.name, "cmd": cmd, "args": args, "result": result,
-                                    "summary": out, "ms": ms.round()}));
+        let shown = cmd_args(&args);
+        let by = paint(DIM, &format!("{ms:.0} ms  by {}", sess.name));
+        let mut ev = json!({"n": n, "step": v["step"], "by": sess.name, "role": sess.role.name(), "cmd": cmd, "args": args,
+                            "ms": ms.round(), "t_wall_ms": mc_proto::clock::wall_ms()});
+        match r {
+            Err(e) => {
+                crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{} {cmd} {shown}  {e}  {by}", paint(DIM, &tag_n)));
+                ev["state"] = json!("failed");
+                ev["error"] = e.json();
+            }
+            Ok(r) => {
+                let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
+                let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
+                    format!("at ({p})")
+                } else if let Some(seq) = r.get("seq") {
+                    format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
+                } else if let Some(k) = r.get("results").and_then(|x| x.as_array()) {
+                    format!("{} steps", k.len())
+                } else {
+                    String::new()
+                };
+                let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
+                let line = [format!("{} {cmd} {shown}", paint(DIM, &tag_n)), if out.is_empty() { out.clone() } else { paint(BOLD, &out) }, by];
+                crate::log::log(level, cmd_tag(cmd), &line.iter().filter(|p| !p.trim().is_empty()).cloned().collect::<Vec<_>>().join("  "));
+                let mut result = r.clone();
+                if let Some(o) = result.as_object_mut() {
+                    o.remove("id");
+                    o.remove("ok");
+                    o.remove("results"); // a chain's results went out step by step
+                }
+                ev["state"] = json!("done");
+                ev["result"] = result;
+                ev["summary"] = json!(out);
+            }
+        }
+        self.remember(&ev);
+        self.event("command", ev);
+    }
+
+    /// The history: the last 2000 commands and messages, for `history` (anyone may read it).
+    fn remember(&self, ev: &Value) {
+        let mut h = self.history.lock().unwrap();
+        let mut e = ev.clone();
+        e["event"] = json!(if ev.get("data").is_some() { "message" } else { "command" });
+        if let Some(r) = e.get_mut("result").and_then(|r| r.as_object_mut()) {
+            r.remove("meta"); // the frame header is long; seq and the summary say enough
+        }
+        h.push_back(e);
+        while h.len() > 2000 {
+            h.pop_front();
+        }
     }
 
     // ---------------------------------------------------------------- background
@@ -694,7 +930,8 @@ impl Server {
             let ev = json!({"event": "telemetry", "t_server": now_ns(), "stage": self.stage.status(),
                             "camera": {"ok": self.cam.ok.load(Ordering::Relaxed), "fps": (self.hub.fps() * 10.0).round() / 10.0,
                                        "info": *self.cam.info.lock().unwrap()},
-                            "operator": self.holder().map(|h| h.name.clone()), "clients": self.clients()});
+                            "operator": self.holder().map(|h| h.name.clone()), "clients": self.clients(),
+                            "queue": self.queue.lock().unwrap().len()});
             self.broadcast(&ev);
             if now_ns() - last_log >= 10_000_000_000 {
                 let dt = (now_ns() - last_log) as f64 / 1e9;
@@ -761,7 +998,7 @@ fn is_read(cmd: &str) -> bool {
 }
 
 fn client_json(sess: &Session, action: &str) -> Value {
-    json!({"action": action, "role": if sess.role == Role::Operator { "operator" } else { "viewer" }, "name": sess.name,
+    json!({"action": action, "role": sess.role.name(), "name": sess.name,
            "addr": sess.addr.ip().to_string(), "after_s": ((now_ns() - sess.since) as f64 / 1e9).round()})
 }
 

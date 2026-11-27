@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+- One queue on PC 1 for everything that changes the instrument: commands run one at a time in the order they came, each numbered `#n`; `stop` acts at once, ends the running chain and drops what waits (E116); reads are not queued.
+- Chains: `m.chain().goto(...).wait(ms).snap(...).run()` runs as one block, nothing between its steps.
+- History: the server keeps the last 2000 commands and messages; `m.history()`, `m.queued()`; the log shows `#n`.
+- Assistant role (for MStitch): the operator's rights through the same queue; joins from the operator's PC, or with `m.lease_key`.
+- Messages between clients: `send`, `on_message`, `request` / `reply`.
+- Python: event handlers run on their own thread, so a handler may send commands.
+
 ## 0.2.2
 - The Python package lives in `mcontrol/` at the top of the repository and the walk-through is `example.ipynb` next to it, so `from mcontrol import Microscope` works in a notebook opened there, also without installing.
 

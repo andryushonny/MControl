@@ -18,6 +18,9 @@ pub const TABLE: &[(&str, &str, &str, &str)] = &[
     ("E112", "net", "Wrong or missing token", "Give the server's token: Microscope(token=...) or MCONTROL_TOKEN"),
     ("E113", "net", "Control not allowed from this address", "Connect as viewer, or add the address to --operators on the server"),
     ("E114", "net", "Too many viewers", "Close a viewer, or start the server with a larger --max-viewers"),
+    ("E115", "net", "Cannot join: no operator, or a wrong lease key", "Start the operator first; give its lease_key, or run the assistant on the operator's PC"),
+    ("E116", "net", "Cancelled by stop", "Send the command again if it is still wanted"),
+    ("E117", "net", "Queue full", "Wait for the queued commands to finish"),
     ("E120", "net", "Cannot listen on this address or port", "Another program uses the port, or the --bind address is not on this PC"),
     ("E121", "net", "Open beyond the local network without a token", "Give --token, or keep --allow to local networks"),
     // stage

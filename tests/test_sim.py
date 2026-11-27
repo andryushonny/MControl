@@ -237,3 +237,66 @@ def test_camera_worker_comes_back_with_its_settings(server):
         f = m.snap()                                       # frames again, from a new worker
         assert abs(f.exposure_ms - 33) < 1                 # with the operator's exposure
         assert "starting it again" in open(server.logfile).read()
+
+
+# ---------------------------------------------------------------- queue, chains, history, assistant, messages
+
+def test_commands_run_in_order(server):
+    import threading
+    with Microscope(HOST) as m:
+        done = []
+        def worker(i):                                     # many threads at once: the server still runs them one by one
+            r = m.link.call("goto", x=float(10 * i))
+            done.append(r["n"])
+        ts = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        h = [e for e in m.history(limit=50) if e["cmd"] == "goto"]
+        assert [e["n"] for e in h] == sorted(e["n"] for e in h)   # history is in the order they ran
+        assert sorted(done) == [e["n"] for e in h][-8:]
+
+
+def test_chain_and_stop(server):
+    with Microscope(HOST) as m:
+        frames = m.chain().goto(x=0, y=0).wait(30).snap(x=200).light(2).snap(dx=100).run()
+        assert frames[2].xyz_um[0] == pytest.approx(200, abs=6)
+        assert frames[4].xyz_um[0] == pytest.approx(300, abs=6)
+        n = [e for e in m.history(limit=20) if e.get("step")]
+        assert [e["step"] for e in n][-5:] == [1, 2, 3, 4, 5] and len({e["n"] for e in n[-5:]}) == 1
+        # stop ends a running chain and drops what waits behind it
+        import threading
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("chain", _catch(lambda: m.chain().wait(3000).goto(x=500).run())))
+        t2 = threading.Thread(target=lambda: out.setdefault("goto", _catch(lambda: m.stage.goto(x=900))))
+        t.start(); time.sleep(0.3); t2.start(); time.sleep(0.3)
+        m.stop()
+        t.join(); t2.join()
+        assert out["chain"] == "E116" and out["goto"] == "E116"
+        assert m.stage.position[0] < 450                   # neither move happened
+
+
+def _catch(fn):
+    try:
+        fn()
+        return "ok"
+    except McError as e:
+        return e.code
+
+
+def test_assistant_and_messages(server):
+    from mcontrol import Assistant
+    with Microscope(HOST, name="script") as m:
+        @m.on_message
+        def answer(msg):                                   # the operator's script answers MStitch
+            if msg["data"].get("want") == "reshoot":
+                f = m.snap(x=msg["data"]["x"])
+                m.reply(msg, {"seq": f.seq})
+        with Assistant(HOST, name="MStitch") as a:         # same PC: no key needed
+            assert a.snap(x=50).xyz_um[0] == pytest.approx(50, abs=6)   # it may act itself, through the same queue
+            got = a.request("operator", {"want": "reshoot", "x": 120}, timeout=10)
+            assert a.fetch(got["seq"]).xyz_um[0] == pytest.approx(120, abs=6)
+        with Viewer(HOST) as v:
+            assert [e for e in v.history() if e["event"] == "message"]  # messages are in the history too
+    with pytest.raises(McError) as e:
+        Assistant(HOST, name="late")                       # nobody in control: nothing to join
+    assert e.value.code == "E115"

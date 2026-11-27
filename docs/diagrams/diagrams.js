@@ -151,3 +151,24 @@ D.frames = () => {
   B.text(40, 620, "PC 1 packs each frame once (5–20 ms): 1 GbE carries ≈ 40 lossless frames/s, 100 Mbit ≈ 10–20 with JPEG.",
     { size: 23, anchor: "start", color: "#444" });
 };
+
+D.queue = () => {
+  const B = board(1500, 820, 29);
+  B.title(40, 50, "One queue, in order", "Every command that changes the instrument gets a number and waits its turn");
+  const op = B.box(40, 150, 300, 120, "PC 2 · operator", "your script", { fill: "green", size: 27 });
+  const as = B.box(40, 320, 300, 120, "PC 2 · assistant", "MStitch", { fill: "green", size: 27 });
+  B.frame(420, 120, 640, 400, "mc-server queue");
+  const items = [["#41", "goto x=0", "grey"], ["#42", "chain: goto · wait · snap · goto · snap", "blue"], ["#43", "light 2", "grey"], ["#44", "snap x=120 (from MStitch)", "grey"]];
+  items.forEach(([n, t, f], i) => B.box(450, 170 + i * 80, 580, 60, `${n}  ${t}`, "", { fill: f, size: 22, bold: false }));
+  B.arrow([340, 210], [450, 200]);
+  B.arrow([340, 380], [450, 440]);
+  const ex = B.box(1140, 230, 320, 150, "runs one at a time", "stage, light, laser, camera\na chain without gaps", { fill: "yellow", size: 25 });
+  B.arrow([1060, 305], [1140, 305]);
+  const st = B.box(40, 520, 300, 100, "stop", "at once, not queued", { fill: "red", size: 27 });
+  B.arrow([340, 570], [1220, 380], { bend: "h", mid: 1100, color: "#c0392b" });
+  B.text(720, 550, "stage stops · chain ends · queued commands dropped (E116)", { size: 21, color: "#c0392b" });
+  const h = B.box(420, 660, 640, 110, "history", "last 2000 commands and messages\nn · who · what · result or error · time", { fill: "purple", size: 26 });
+  B.arrow([1360, 380], [900, 660], { bend: "v", mid: 610, label: "every result", at: [1250, 595], anchor: "start" });
+  const v = B.box(1140, 660, 320, 110, "anyone", "m.history() · watch() · events", { fill: "yellow", size: 25 });
+  B.arrow([1060, 715], [1140, 715]);
+};

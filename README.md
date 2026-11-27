@@ -71,6 +71,30 @@ The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, came
 
 \* a real microscope frame with about 2 DN of sensor noise; the noise decides how small frames get. On PC 1 the packing takes about 5–20 ms per frame (lossless / JPEG planes in parallel); `mc-server codec-bench` measures it on your PC. `Frame.codec` says how a frame came, `Frame.exact` whether its pixels are the sensor's; `Frame.raw()` unpacks.
 
+**One queue, in order.** Everything that changes the instrument goes into one queue on PC 1 and runs one command at a time, in the order it came, each with a number `#n`. A **chain** runs as one block: nothing gets between its steps. `stop` does not wait: the stage stops at once, the running chain ends and what waits behind it is dropped (E116). Reads (status, camera state, history) are not queued.
+
+![queue](docs/img/queue.png)
+
+```python
+# one scan step: no other command can get in between
+frames = m.chain().goto(x=0, y=0).wait(50).snap(settle_ms=20).goto(x=300).snap(settle_ms=20).run()
+
+for e in m.history(limit=20):      # what was done, by whom, in which order (the server keeps 2000)
+    print(describe(e))             # 14:02:11  #41.3 PC-2: snap settle_ms=20  frame 512 at (0.0, 0.0, 0.0)  (83 ms)
+m.queued()                          # what still waits
+```
+
+**Assistant and messages (for MStitch).** A program next to the operator's script, such as the stitcher, joins as an `Assistant`: it has the operator's rights and puts its commands into the same queue, while that operator holds control. On the operator's PC it joins without a key; on another PC it needs the operator's `m.lease_key`. Clients can also send each other messages through the server and wait for an answer:
+
+```python
+# MStitch (on PC 2)                                   # the operator's script
+a = Assistant(name="MStitch")                         @m.on_message
+f = a.snap(x=120)                  # act itself       def handle(msg):
+ans = a.request("operator",                               if msg["data"]["want"] == "reshoot":
+                {"want": "reshoot", "x": 120})                f = m.snap(x=msg["data"]["x"])
+new = a.fetch(ans["seq"])          # the new frame            m.reply(msg, {"seq": f.seq})
+```
+
 **Events**: every viewer sees what the operator does, live:
 
 ![events](docs/img/events.png)
@@ -96,6 +120,10 @@ Viewer().watch()          # prints every operator action, like the server log
 | `m.snap(...)` | `x/y/z` absolute or `dx/dy/dz` relative, `settle_ms`; returns a `Frame` |
 | `m.live(seconds=, count=, fps=)` | live frames while you loop: `for f in m.live(seconds=5): ...` |
 | `m.latest()`, `m.fetch(seq)` | the newest frame; a re-fetch from the server ring |
+| `m.chain()` | `.goto() .move() .snap() .wait(ms) .light() .laser() .exposure() .gain() .add(cmd, ...)`, then `.run()` → one result per step (Frames for snaps) |
+| `m.history(limit, since)`, `m.queued()` | the server's record of commands and messages; what still waits |
+| `Assistant(name=, lease_key=)` | a helper with the operator's rights, through the same queue (MStitch) |
+| `send(to, data)`, `on_message(fn)`, `request(to, data)`, `reply(msg, data)` | messages between clients: `"operator"`, `"all"` or a name |
 | `m.on_event(fn)`, `m.watch()` | events: every operator command (started / done / failed, with result), clients, telemetry (1 Hz), errors; `watch()` prints them as lines |
 | `Frame` | `raw()`, `rgb(full=False)`, `save()`, `meta`, `xyz_um`, `moving`, `settled_ms`, `t_local_ns`, `age_ms`, `codec`, `exact` |
 
@@ -153,6 +181,9 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 | E112 | net | Wrong or missing token | Give the server's token: Microscope(token=...) or MCONTROL_TOKEN |
 | E113 | net | Control not allowed from this address | Connect as viewer, or add the address to --operators on the server |
 | E114 | net | Too many viewers | Close a viewer, or start the server with a larger --max-viewers |
+| E115 | net | Cannot join: no operator, or a wrong lease key | Start the operator first; give its lease_key, or run the assistant on the operator's PC |
+| E116 | net | Cancelled by stop | Send the command again if it is still wanted |
+| E117 | net | Queue full | Wait for the queued commands to finish |
 | E120 | net | Cannot listen on this address or port | Another program uses the port, or the --bind address is not on this PC |
 | E121 | net | Open beyond the local network without a token | Give --token, or keep --allow to local networks |
 | E201 | stage | Outside the soft limits | Stay inside the stage range (mc-server --help shows the limits) |
@@ -182,7 +213,8 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 * **Control** on TCP 5160: messages `[u32 LE length][u8 kind=1][JSON]`. First `{"cmd":"hello","role":"operator"|"viewer","name":...,"token":...}`, then `{"cmd":..., "id":n, ...}` → `{"id":n,"ok":true,...}` or `{"ok":false,"error":{"code","msg"}}`. Events come as `{"event":...}`.
 * **Data** on TCP 5161: `{"session":..., "want":"raw"|"preview", "codec":"auto"|"lossless"|"jpeg"|"raw", "quality":92}`, then frames `[len][kind=2][u32 header length][header JSON][payload]`. The header's `codec` says how the payload is packed: `lossless` = zstd of the difference to the same-colour pixel two to the left (first two columns: two rows up), wrapping; `jpeg` = 4 × `[u32 length][JPEG]` for the Bayer planes (x, y) = (0,0), (1,0), (0,1), (1,1).
 * **Discovery**: UDP broadcast `MCONTROL?` to port 5159; the answer has the name, the real ports and whether a token is needed.
-* **Events**: `command` (`state`: started / done / failed, `by`, `cmd`, `args`, `result`, `ms`), `client`, `operator`, `safe`, `error`, `telemetry`.
+* **Events**: `command` (`state`: queued / started / done / failed, `n`, `step`, `by`, `cmd`, `args`, `result`, `ms`), `message`, `client`, `operator`, `safe`, `error`, `telemetry`.
+* **Queue**: replies to queued commands carry `n`. `chain` = `{"cmd":"chain","steps":[{...},...],"stop_on_error":true}` → `{"results":[...]}`; `wait` = `{"cmd":"wait","ms":50}`; `history` = `{"since":n,"limit":100}` → `{"history":[...],"queued":[...]}`; `send` = `{"to":"operator","data":{...},"reply_to":n}`. Role `assistant` joins with `"join": lease_key` (or from the operator's own address).
 * **Clock**: `ping {t1}` → `{t1,t2,t3}`. The offset comes from the sample with the smallest round trip among the last 32.
 
 ## Build and test

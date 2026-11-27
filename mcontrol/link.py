@@ -3,6 +3,7 @@ import collections
 import itertools
 import json
 import os
+import queue
 import socket
 import threading
 import time
@@ -58,7 +59,11 @@ class Link:
     """Control connection. Thread-safe. Reconnects by itself; repeats a command after a reconnect
     only when repeating it is harmless (idempotent: absolute targets, settings, reads)."""
 
-    def __init__(self, host=None, role="viewer", name=None, timeout=120.0, reconnect_s=10.0, token=None):
+    def __init__(self, host=None, role="viewer", name=None, timeout=120.0, reconnect_s=10.0, token=None, hello=None):
+        self.hello_extra = hello or {}         # more fields for hello (an assistant's lease key)
+        # events go to the handlers on their own thread, in order: a handler may send commands itself
+        self._events = queue.Queue()
+        threading.Thread(target=self._dispatch, daemon=True, name="mc-events").start()
         self.role, self.name, self.timeout = role, name or socket.gethostname(), timeout
         self.token = token or os.environ.get("MCONTROL_TOKEN")   # else the one remembered for that server
         self.reconnect_s = reconnect_s         # how long an idempotent command waits for the server to come back
@@ -83,7 +88,7 @@ class Link:
             token = self.token or (_memo("tokens") or {}).get(h)
             try:
                 w = Wire(ip, port)
-                hello = {"cmd": "hello", "id": 0, "role": self.role, "name": self.name, "client": "mcontrol-py"}
+                hello = {"cmd": "hello", "id": 0, "role": self.role, "name": self.name, "client": "mcontrol-py", **self.hello_extra}
                 if token:
                     hello["token"] = token
                 w.sock.settimeout(5.0)             # something else may sit on that port and never answer
@@ -98,11 +103,12 @@ class Link:
             if not r.get("ok"):
                 w.close()
                 e = McError.from_reply(r.get("error", {}))
-                if e.code in ("E103", "E111", "E112", "E113", "E114"):   # the server said no: final
+                if e.code in ("E103", "E111", "E112", "E113", "E114", "E115"):   # the server said no: final
                     raise e
                 errors.append(f"{h}: {e}")        # not a control port (e.g. a remembered port that moved)
                 continue
             self.w, self.addr, self.session, self.server = w, ip, r["session"], r.get("server", {})
+            self.lease_key = r.get("lease_key")   # an operator's: what an assistant on another PC needs
             _memo("host", h)
             if token:                          # so it is given once per server, not in every script
                 _memo("tokens", {**(_memo("tokens") or {}), h: token})
@@ -140,8 +146,7 @@ class Link:
             while True:
                 m = w.recv_json()
                 if "event" in m:
-                    for h in self.handlers:
-                        h(m)
+                    self._events.put(m)
                 else:
                     with self._plock:
                         slot = self._pending.pop(m.get("id"), None)
@@ -155,8 +160,16 @@ class Link:
             for slot in self._pending.values():
                 slot[0].set()
             self._pending.clear()
-        for h in self.handlers:
-            h({"event": "closed"})
+        self._events.put({"event": "closed"})
+
+    def _dispatch(self):
+        while True:
+            ev = self._events.get()
+            for h in list(self.handlers):
+                try:
+                    h(ev)
+                except Exception as e:             # a broken handler must not stop the others
+                    print(f"mcontrol: event handler {h!r} failed: {e!r}")
 
     # ------------------------------------------------------------ commands
     def call(self, cmd, idempotent=False, timeout=None, **args):

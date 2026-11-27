@@ -102,10 +102,13 @@ impl Access {
         self.token.is_some()
     }
 
-    /// Constant time, so the token cannot be guessed byte by byte from reply times.
     pub fn token_ok(&self, given: &str) -> bool {
-        let Some(t) = &self.token else { return true };
-        let (a, b) = (t.as_bytes(), given.as_bytes());
+        self.token.as_deref().map_or(true, |t| self.token_eq(given, t))
+    }
+
+    /// Constant time, so a secret cannot be guessed byte by byte from reply times.
+    pub fn token_eq(&self, given: &str, secret: &str) -> bool {
+        let (a, b) = (secret.as_bytes(), given.as_bytes());
         let mut d = (a.len() ^ b.len()) as u8;
         for i in 0..a.len() {
             d |= a[i] ^ b.get(i).copied().unwrap_or(0);

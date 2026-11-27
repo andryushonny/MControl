@@ -3,6 +3,7 @@ stage, camera, light, laser, cooler — each a small object on the same link."""
 import threading
 import time
 
+from .errors import McError
 from .events import describe
 from .link import Link
 from .stream import Stream
@@ -126,13 +127,54 @@ class _Client:
     _fps = None                                 # preview rate asked by a Viewer
     _codec, _quality = "auto", None             # how full frames are packed (Microscope)
 
-    def __init__(self, host=None, name=None, token=None, timeout=120.0):
+    def __init__(self, host=None, name=None, token=None, timeout=120.0, hello=None):
         """host: "192.168.1.50", "pc-1:5170", "[fe80::1]"; omitted: MCONTROL_HOST, the last server used,
         then LAN discovery. token: only if the server asks for one (also MCONTROL_TOKEN); remembered per server."""
-        self.link = Link(host, self.ROLE, name, timeout, token=token)
+        self.link = Link(host, self.ROLE, name, timeout, token=token, hello=hello)
         self._stream = None
+        self._waiting = {}                      # request n -> [Event, reply message]
+        self.link.handlers.append(self._replies)
 
-    # --- shared by both roles
+    # --- shared by every role
+    def history(self, limit=100, since=0) -> list:
+        """What was done on the microscope, in order: commands (n, who, what, result or error, ms) and messages.
+        The server keeps the last 2000. `describe(e)` makes a line of each; commands still waiting are in queued()."""
+        return self.link.call("history", idempotent=True, limit=limit, since=since)["history"]
+
+    def queued(self) -> list:
+        """Commands waiting their turn on the server."""
+        return self.link.call("history", idempotent=True, limit=0)["queued"]
+
+    # --- messages between clients (e.g. MStitch and the operator's script)
+    def send(self, to, data, reply_to=None) -> int:
+        """A message to "operator", "all", or a client by name. Returns its number n."""
+        return self.link.call("send", to=to, data=data, reply_to=reply_to)["n"]
+
+    def on_message(self, fn):
+        """fn(message) for every message to us: {"n", "from", "role", "data", "reply_to"}. Usable as a decorator."""
+        self.link.handlers.append(lambda ev: ev.get("event") == "message" and fn(ev))
+        return fn
+
+    def request(self, to, data, timeout=60.0):
+        """Send and wait for the answer (a message with reply_to = our n). Returns the answer's data."""
+        n = self.link.call("send", to=to, data=data)["n"]
+        slot = self._waiting.setdefault(n, [threading.Event(), None])
+        try:
+            if not slot[0].wait(timeout):
+                raise McError("E109", "no answer to the request", f"to {to}")
+            return slot[1]["data"]
+        finally:
+            self._waiting.pop(n, None)
+
+    def reply(self, message, data) -> int:
+        """Answer a message got through on_message."""
+        return self.send(message["from"], data, reply_to=message["n"])
+
+    def _replies(self, ev):
+        if ev.get("event") == "message" and ev.get("reply_to") is not None:
+            slot = self._waiting.setdefault(ev["reply_to"], [threading.Event(), None])
+            slot[1] = ev
+            slot[0].set()
     @property
     def status(self) -> dict:
         return self.link.call("status", idempotent=True)
@@ -223,11 +265,11 @@ class Microscope(_Client):
     ROLE = "operator"
     RAW = True
 
-    def __init__(self, host=None, name=None, token=None, codec="auto", quality=None, timeout=120.0):
+    def __init__(self, host=None, name=None, token=None, codec="auto", quality=None, timeout=120.0, hello=None):
         """codec for full frames: "auto" (default: snaps exact, live frames as good as the link carries),
         "lossless" (always exact, ~2x smaller), "jpeg" (quality 30..100, default 92), "raw"."""
         self._codec, self._quality = codec, quality
-        super().__init__(host, name, token, timeout)
+        super().__init__(host, name, token, timeout, hello)
         l = self.link
         self.stage, self.camera, self.light, self.laser, self.cooler = Stage(l), Camera(l), Light(l), Laser(l), Cooler(l)
 
@@ -240,8 +282,23 @@ class Microscope(_Client):
         r = self.link.call("snap", idempotent=not rel, **a)
         return s.frame(r["seq"], timeout=(timeout_ms or 5000) / 1000 + 5)
 
+    @property
+    def lease_key(self):
+        """Give this to an Assistant on another PC (on this PC it joins without it)."""
+        return self.link.lease_key
+
+    def chain(self, stop_on_error=True):
+        """Commands that run back to back, nothing in between (a scan step: move, wait, snap ...):
+
+            frames = m.chain().goto(x=0, y=0).wait(50).snap().goto(x=300).snap().run()
+
+        or  `with m.chain() as c: c.light(3).snap(x=10)`  (runs on leaving the block; results in c.results).
+        A failed step ends the chain (stop_on_error); stop() ends it too. run() returns one result per step,
+        Frames for snaps."""
+        return Chain(self, stop_on_error)
+
     def stop(self):
-        """Stage stops now."""
+        """Stage stops now; the running chain ends and waiting commands are dropped (E116)."""
         self.stage.stop()
 
     def release(self):
@@ -251,3 +308,63 @@ class Microscope(_Client):
 
 def _xyz(**kw):
     return {k: float(v) for k, v in kw.items() if v is not None}
+
+
+class Chain:
+    """Steps for Microscope.chain(). Every method adds a step and returns the chain, so steps can be strung."""
+
+    def __init__(self, m, stop_on_error=True):
+        self._m, self.stop_on_error, self.steps, self.results = m, stop_on_error, [], None
+
+    def add(self, cmd, **args):
+        self.steps.append({"cmd": cmd, **{k: v for k, v in args.items() if v is not None}})
+        return self
+
+    def goto(self, x=None, y=None, z=None):
+        return self.add("goto", **_xyz(x=x, y=y, z=z))
+
+    def move(self, dx=None, dy=None, dz=None):
+        return self.add("move", **_xyz(dx=dx, dy=dy, dz=dz))
+
+    def snap(self, x=None, y=None, z=None, dx=None, dy=None, dz=None, settle_ms=None):
+        return self.add("snap", **_xyz(x=x, y=y, z=z, dx=dx, dy=dy, dz=dz, settle_ms=settle_ms))
+
+    def wait(self, ms):
+        return self.add("wait", ms=ms)
+
+    def light(self, level):
+        return self.add("light", level=int(level))
+
+    def laser(self, mw):
+        return self.add("laser", mw=int(mw))
+
+    def exposure(self, ms):
+        return self.add("exposure", ms=ms)
+
+    def gain(self, value):
+        return self.add("gain", value=value)
+
+    def run(self, timeout=None) -> list:
+        m = self._m
+        s = m.stream if any(st["cmd"] == "snap" for st in self.steps) else None
+        # safe to send again after a reconnect only if every step is absolute
+        again = all(st["cmd"] != "move" and not any(k in st for k in ("dx", "dy", "dz")) for st in self.steps)
+        r = m.link.call("chain", idempotent=again, timeout=timeout, steps=self.steps, stop_on_error=self.stop_on_error)
+        self.results = [s.frame(x["seq"]) if s and isinstance(x, dict) and "seq" in x else x for x in r["results"]]
+        return self.results
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, *rest):
+        if kind is None:
+            self.run()
+
+
+class Assistant(Microscope):
+    """A helper of the operator, e.g. MStitch on the operator's PC: same rights, same queue, while that
+    operator holds control. On the operator's PC no key is needed; elsewhere give the operator's m.lease_key."""
+    ROLE = "assistant"
+
+    def __init__(self, host=None, name=None, lease_key=None, token=None, codec="auto", quality=None, timeout=120.0):
+        super().__init__(host, name, token, codec, quality, timeout, hello={"join": lease_key} if lease_key else None)
