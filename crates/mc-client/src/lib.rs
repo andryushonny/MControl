@@ -175,11 +175,17 @@ impl Client {
 
     /// Open the data connection. want: "raw" (operator) or "preview".
     pub fn data(&self, want: &str, fps: f64) -> io::Result<DataConn> {
+        self.data_with(json!({"want": want, "fps": fps}))
+    }
+
+    /// Open the data connection with any hello fields: {"want": "raw", "codec": "auto" | "lossless" | ..., "fps": ...}.
+    pub fn data_with(&self, mut hello: Value) -> io::Result<DataConn> {
         let port = self.server["data_port"].as_u64().unwrap_or(mc_proto::DATA_PORT as u64) as u16;
         let c = TcpStream::connect_timeout(&SocketAddr::new(self.addr.ip(), port), Duration::from_secs(5))?;
         let _ = c.set_recv_buffer_size_hint();
         let mut w = c.try_clone()?;
-        write_json(&mut w, &json!({"session": self.session, "want": want, "fps": fps}))?;
+        hello["session"] = json!(self.session);
+        write_json(&mut w, &hello)?;
         let mut r = BufReader::with_capacity(1 << 20, c);
         let mut buf = Vec::new();
         read_msg(&mut r, &mut buf)?;

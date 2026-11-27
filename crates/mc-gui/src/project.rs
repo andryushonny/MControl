@@ -1,0 +1,254 @@
+//! What the operator builds, saved as project.json in the project folder after every change:
+//! samples (a chip or substrate each), their selections (rectangles on the stage, in drawing order),
+//! scans of each selection, the crosses marked and the lattice they give.
+
+use crate::geom::{Affine, Lattice, Optics, Rect, P2};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mode {
+    Quick,
+    Quality,
+}
+
+impl Mode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Quick => "quick",
+            Mode::Quality => "quality",
+        }
+    }
+}
+
+/// One scan of a selection: the frames folder and, once stitched, the map folder (MStitch's output).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Scan {
+    pub mode: Mode,
+    pub frames: String,
+    pub map: Option<String>,
+    pub n_frames: usize,
+    pub when: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Selection {
+    pub id: u32,
+    pub name: String,
+    pub rect: Rect,
+    pub color: [u8; 3],
+    pub visible: bool,
+    /// cut this one into squares on export
+    pub cut: bool,
+    pub scans: Vec<Scan>,
+    /// Align's correction of the map: stage as the map says -> stage as the sample's lattice says
+    #[serde(default)]
+    pub fix: Option<Affine>,
+    /// the objective it is scanned with (a name from the project's objectives)
+    #[serde(default)]
+    pub objective: String,
+}
+
+impl Selection {
+    /// The map shown and cut: the newest quality scan, else the newest quick one.
+    pub fn best_scan(&self) -> Option<&Scan> {
+        let done = |m: Mode| self.scans.iter().rev().find(|s| s.mode == m && s.map.is_some());
+        done(Mode::Quality).or_else(|| done(Mode::Quick))
+    }
+}
+
+/// A cross marked by hand on a stitched map, with its lattice number (X, Y).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Cross {
+    pub at: P2,
+    pub label: [i32; 2],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Sample {
+    pub name: String,
+    pub selections: Vec<Selection>,
+    #[serde(default)]
+    pub crosses: Vec<Cross>,
+    #[serde(default)]
+    pub lattice: Option<Lattice>,
+    /// the view is turned by this much (degrees) so the lattice stands level on the screen
+    #[serde(default)]
+    pub turn_deg: f64,
+}
+
+impl Sample {
+    pub fn new(name: &str) -> Sample {
+        Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, turn_deg: 0.0 }
+    }
+
+    /// The box around all selections.
+    pub fn extent(&self) -> Option<Rect> {
+        self.selections.iter().map(|s| s.rect).reduce(|a, b| a.union(&b))
+    }
+
+    pub fn refit(&mut self) -> Result<(), String> {
+        let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().map(|c| (c.at, c.label)).collect();
+        match Lattice::fit(&marks) {
+            Ok(l) => {
+                self.lattice = Some(l);
+                Ok(())
+            }
+            Err(e) => {
+                self.lattice = None;
+                Err(e)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScanSettings {
+    /// overlap of neighbouring frames, part of the field
+    pub overlap_quick: f64,
+    pub overlap_quality: f64,
+    pub settle_ms: f64,
+    /// every frame is approached from the same side, from this far back (no backlash in the data)
+    pub back_um: f64,
+    /// MStitch command line (until its C API is linked in)
+    pub mstitch: String,
+}
+
+impl Default for ScanSettings {
+    fn default() -> Self {
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into() }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Project {
+    pub name: String,
+    /// optics of each objective (scale, camera turn, distortion), calibrated one by one
+    #[serde(default)]
+    pub objectives: Vec<Optics>,
+    /// the objective on the microscope now (live picture, calibration, new selections)
+    #[serde(default)]
+    pub current: usize,
+    /// projects from before objectives: their one set of optics
+    #[serde(default, skip_serializing)]
+    optics: Option<Optics>,
+    /// one motor step, um: selections snap to it
+    pub step_um: f64,
+    pub samples: Vec<Sample>,
+    pub active: usize,
+    pub scan: ScanSettings,
+    pub next_id: u32,
+    /// white balance: gains for red, green, blue (live, maps, exported squares; raw frames stay raw)
+    #[serde(default = "no_balance")]
+    pub wb: [f64; 3],
+    #[serde(skip)]
+    pub folder: PathBuf,
+}
+
+fn no_balance() -> [f64; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+/// Nominal optics until calibrated (MindVision 2592 x 1944, pixel 2.2 um behind the microscope's tube).
+fn default_objectives() -> Vec<Optics> {
+    [("10x", 0.5), ("20x", 0.25), ("50x", 0.1), ("100x", 0.05)].iter().map(|(n, u)| Optics::guess(n, *u, [2592, 1944])).collect()
+}
+
+const COLORS: [[u8; 3]; 8] =
+    [[230, 80, 60], [60, 150, 230], [70, 190, 90], [230, 170, 40], [170, 90, 220], [40, 190, 190], [230, 100, 170], [140, 140, 140]];
+
+impl Project {
+    pub fn new(folder: &Path) -> Project {
+        Project {
+            name: folder.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into()),
+            objectives: default_objectives(),
+            current: 0,
+            optics: None,
+            step_um: 5.556,
+            samples: vec![Sample::new("Sample 1")],
+            active: 0,
+            scan: ScanSettings::default(),
+            next_id: 1,
+            wb: no_balance(),
+            folder: folder.to_path_buf(),
+        }
+    }
+
+    pub fn open(folder: &Path) -> Result<Project, String> {
+        let f = folder.join("project.json");
+        if !f.exists() {
+            std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+            let p = Project::new(folder);
+            p.save()?;
+            return Ok(p);
+        }
+        let s = std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+        let mut p: Project = serde_json::from_str(&s).map_err(|e| format!("{}: {e}", f.display()))?;
+        p.folder = folder.to_path_buf();
+        if p.objectives.is_empty() {
+            p.objectives = p.optics.take().map(|o| vec![o]).unwrap_or_else(default_objectives);
+        }
+        p.current = p.current.min(p.objectives.len() - 1);
+        if p.samples.is_empty() {
+            p.samples.push(Sample::new("Sample 1"));
+        }
+        p.active = p.active.min(p.samples.len() - 1);
+        Ok(p)
+    }
+
+    /// Written to a temporary file first, then renamed: a crash never leaves half a project.
+    pub fn save(&self) -> Result<(), String> {
+        let tmp = self.folder.join("project.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap()).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, self.folder.join("project.json")).map_err(|e| e.to_string())
+    }
+
+    /// The objective on the microscope now.
+    pub fn optics(&self) -> &Optics {
+        &self.objectives[self.current]
+    }
+    pub fn optics_mut(&mut self) -> &mut Optics {
+        &mut self.objectives[self.current]
+    }
+    /// A selection's objective (by name; the current one if it has none or an unknown one).
+    pub fn optics_of(&self, s: &Selection) -> &Optics {
+        self.objectives.iter().find(|o| o.objective == s.objective).unwrap_or(self.optics())
+    }
+
+    pub fn sample(&self) -> &Sample {
+        &self.samples[self.active]
+    }
+    pub fn sample_mut(&mut self) -> &mut Sample {
+        &mut self.samples[self.active]
+    }
+
+    pub fn add_selection(&mut self, rect: Rect) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        let n = self.sample().selections.len();
+        let color = COLORS[(id as usize - 1) % COLORS.len()];
+        let objective = self.optics().objective.clone();
+        self.sample_mut().selections.push(Selection {
+            id,
+            name: format!("Selection {}", n + 1),
+            rect,
+            color,
+            visible: true,
+            cut: true,
+            scans: vec![],
+            fix: None,
+            objective,
+        });
+        id
+    }
+
+    pub fn selection_mut(&mut self, id: u32) -> Option<&mut Selection> {
+        self.samples.iter_mut().flat_map(|s| s.selections.iter_mut()).find(|s| s.id == id)
+    }
+
+    pub fn path(&self, rel: &str) -> PathBuf {
+        self.folder.join(rel)
+    }
+}

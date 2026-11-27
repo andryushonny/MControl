@@ -28,6 +28,8 @@ USAGE: mc-server [options]
   --port COM3       controller port (default: auto, the USB serial port that answers)
   --sim             simulated stage and camera (no hardware)
   --sim-size WxH    simulated camera size (default 1296x972)
+  --sim-k1 K        simulated lens distortion (radial, e.g. 0.05)
+  --sim-tilt DEG    simulated sample turned on the stage
   --name NAME       name shown to clients (default: computer name)
 NETWORK (local network only unless told otherwise)
   --bind IP         listen on this address only, e.g. the PC's own LAN or VPN address (default: all)
@@ -203,6 +205,12 @@ fn main() {
     if sim {
         wargs.push("--sim".to_string());
         wargs.push(arg("--sim-size").unwrap_or_else(|| "1296x972".into()));
+        for k in ["--sim-k1", "--sim-tilt"] {
+            if let Some(v) = arg(k) {
+                wargs.push(k.into());
+                wargs.push(v);
+            }
+        }
     }
     if let Some(d) = arg("--sdk") {
         wargs.push("--sdk".into());
@@ -220,6 +228,8 @@ fn main() {
     };
     *cam_slot.lock().unwrap() = Some(cam.clone());
     if sim {
+        // where the stage is now (restored from the last run), then after every move
+        cam.tell(json!({"cmd": "sim_pos", "xyz": st.shared.lock().unwrap().pos_um()}));
         let c2 = cam.clone();
         let _ = st.call(move |w| {
             w.set_on_move(Box::new(move |p| c2.tell(json!({"cmd": "sim_pos", "xyz": p}))));

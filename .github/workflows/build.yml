@@ -21,6 +21,7 @@ jobs:
           path: |
             target/release/mc-server.exe
             target/release/mc-operator.exe
+            target/release/mc-cli.exe
             target/release/mc-viewer.exe
   linux:
     runs-on: ubuntu-latest
@@ -62,4 +63,5 @@ jobs:
           files: |
             dist/mc-server.exe
             dist/mc-operator.exe
+            dist/mc-cli.exe
             dist/mc-viewer.exe

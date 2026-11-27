@@ -1,0 +1,23 @@
+[package]
+name = "mc-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MControl operator: the graphical program on PC 2 (map, selections, scans, stitching, lattice, cutting, DXF)"
+
+[[bin]]
+name = "mc-operator"
+path = "src/main.rs"
+
+[dependencies]
+mc-proto = { path = "../mc-proto" }
+mc-client = { path = "../mc-client" }
+serde_json.workspace = true
+serde = { version = "1", features = ["derive"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "glow", "persistence", "x11", "wayland"] }
+egui_extras = { version = "0.37", default-features = false }
+zstd = { version = "0.13", default-features = false }
+zune-jpeg = "0.4"
+png = "0.17"
+rfd = "0.15"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

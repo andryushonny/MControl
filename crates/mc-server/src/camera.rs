@@ -31,9 +31,12 @@ struct Sim {
     gain: i32,
     seq: u64,
     t0: u64,
+    /// a lens with radial distortion k1 (as mc-operator models it), and a sample turned on the stage (radians)
+    k1: f64,
+    tilt: f64,
 }
 
-/// `mc-server camera-worker [--sdk DIR] [--sim WxH] [--sim-px UM]`
+/// `mc-server camera-worker [--sdk DIR] [--sim WxH] [--sim-px UM] [--sim-k1 K] [--sim-tilt DEG]`
 pub fn worker_main(args: &[String]) -> ! {
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let out = std::io::stdout();
@@ -41,7 +44,9 @@ pub fn worker_main(args: &[String]) -> ! {
     let dev = if let Some(sz) = arg("--sim") {
         let (w, h) = sz.split_once('x').map(|(a, b)| (a.parse().unwrap_or(1296), b.parse().unwrap_or(972))).unwrap_or((1296, 972));
         let px = arg("--sim-px").and_then(|v| v.parse().ok()).unwrap_or(0.22);
-        Ok(Dev::Sim(Sim { w: w & !1, h: h & !1, px_um: px, pos: [0.0; 3], exp_us: 20_000.0, gain: 1, seq: 0, t0: now_ns() }))
+        let k1 = arg("--sim-k1").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let tilt = arg("--sim-tilt").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0).to_radians();
+        Ok(Dev::Sim(Sim { w: w & !1, h: h & !1, px_um: px, pos: [0.0; 3], exp_us: 20_000.0, gain: 1, seq: 0, t0: now_ns(), k1, tilt }))
     } else {
         Sdk::load(arg("--sdk").as_deref()).and_then(|s| s.open_first()).map(Dev::Mv)
     };
@@ -211,12 +216,24 @@ fn sim_frame(s: &mut Sim) -> Raw {
     let (cx, cy) = (s.pos[0], s.pos[1]);
     let blur = (s.pos[2].abs() / 20.0).min(1.0); // out of focus: lower contrast
     let mut rng: u64 = 0x9E37_79B9_7F4A_7C15 ^ s.seq;
+    let r0 = ((w * w + h * h) as f64).sqrt() / 2.0;
+    let (tc, ts) = (s.tilt.cos(), s.tilt.sin());
     for j in 0..h {
-        let wy = cy + (j as f64 - h as f64 / 2.0) * s.px_um;
-        let fy = wy.rem_euclid(100.0);
         for i in 0..w {
-            let wx = cx + (i as f64 - w as f64 / 2.0) * s.px_um;
-            let fx = wx.rem_euclid(100.0);
+            // the sensor pixel's offset from the centre (the stage position is the frame's centre); through the
+            // lens it shows the ideal offset q with p = q (1 + k1 |q|^2 / r0^2)
+            let p = (i as f64 + 0.5 - w as f64 / 2.0, j as f64 + 0.5 - h as f64 / 2.0);
+            let mut q = p;
+            if s.k1 != 0.0 {
+                for _ in 0..8 {
+                    let f = 1.0 + s.k1 * (q.0 * q.0 + q.1 * q.1) / (r0 * r0);
+                    q = (p.0 / f, p.1 / f);
+                }
+            }
+            let (gx, gy) = (cx + q.0 * s.px_um, cy + q.1 * s.px_um);
+            // the sample's own axes, turned against the stage's
+            let (wx, wy) = (tc * gx + ts * gy, -ts * gx + tc * gy);
+            let (fx, fy) = (wx.rem_euclid(100.0), wy.rem_euclid(100.0));
             let mut v = 200.0;
             let near = |f: f64| f < 1.0 || f > 99.0;
             let arm = |f: f64| f < 8.0 || f > 92.0;
@@ -359,7 +376,8 @@ impl Camera {
                             last_fatal.clear();
                             drop(i);
                             // a camera opened again keeps the operator's settings
-                            for s in self.settings.lock().unwrap().clone() {
+                            let again = self.settings.lock().unwrap().clone(); // not held while telling: tell() takes it
+                            for s in again {
                                 self.tell(s);
                             }
                         }
@@ -453,6 +471,12 @@ impl Camera {
 
     /// Fire and forget (simulator position updates).
     pub fn tell(&self, mut v: Value) {
+        if v["cmd"] == "sim_pos" {
+            // the simulated camera draws the sample where the stage is: a new worker needs it too
+            let mut st = self.settings.lock().unwrap();
+            st.retain(|s| s["cmd"] != "sim_pos");
+            st.push(v.clone());
+        }
         v["id"] = json!(0);
         if let Some(s) = self.stdin.lock().unwrap().as_mut() {
             let _ = s.write_all(format!("{}\n", v).as_bytes()).and_then(|_| s.flush());

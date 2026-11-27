@@ -3,14 +3,14 @@ name = "mc-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MControl clients: mc-operator (control + full frames) and mc-viewer (read-only)"
+description = "MControl Rust client library, plus mc-cli (commands from the console) and mc-viewer (read-only)"
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "mc-operator"
-path = "src/bin/mc-operator.rs"
+name = "mc-cli"
+path = "src/bin/mc-cli.rs"
 
 [[bin]]
 name = "mc-viewer"

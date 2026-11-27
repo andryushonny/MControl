@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+- `mc-operator.exe` is now the operator's program (Rust, GPU): map of the stage with the live picture and a preview map, selections snapped to the motor step, a scan queue grouped by objective (one stop per objective change) with MStitch stitching beside the next scan, status bar with progress and time left.
+- Limits per selection, with the overlap: quick ≤ 1200 frames, quality ≤ 225.
+- Lattice of crosses from 2–3 marked crosses (sub-pixel), numbers in the top left of each square, *Level grid* for a sample turned on the stage, *Align* of every map onto the lattice, cutting all selections along one lattice into squares, DXF for AutoCAD (layers in list order, µm).
+- Optics per objective calibrated with the stage: scale, camera turn, lens distortion (frames corrected before stitching); white balance.
+- The command line tool is `mc-cli.exe`.
+- Simulator: the camera starts where the stage is; `--sim-k1` (lens distortion) and `--sim-tilt` (sample turned) for tests.
+
 ## 0.4.0
 - Scripts read as plain Python: `m.goto()`, `m.move()`, `m.sleep()`, `m.snap()` straight on the microscope, one per line.
 - `with m.block():` instead of chains: the commands inside run with nothing from other clients between them; each returns its result at once. A block ends with the `with`, on stop, when its client leaves, or after 30 s idle.

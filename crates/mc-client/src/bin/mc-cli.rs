@@ -1,12 +1,12 @@
-//! mc-operator — control the microscope from the command line.
+//! mc-cli — control the microscope from the command line.
 //!
 //! ```text
-//! mc-operator [auto|HOST] status
-//! mc-operator auto goto x=100 y=0          move / goto / snap take x= y= z= dx= dy= dz= settle_ms=
-//! mc-operator auto move dz=-50
-//! mc-operator auto snap x=0 y=0 out=frame.raw
-//! mc-operator auto light level=3           laser mw=5, exposure ms=20, gain value=2, zero, stop, ...
-//! mc-operator auto bench 10                full-frame stream for 10 s: fps, MB/s, latency
+//! mc-cli [auto|HOST] status
+//! mc-cli auto goto x=100 y=0          move / goto / snap take x= y= z= dx= dy= dz= settle_ms=
+//! mc-cli auto move dz=-50
+//! mc-cli auto snap x=0 y=0 out=frame.raw
+//! mc-cli auto light level=3           laser mw=5, exposure ms=20, gain value=2, zero, stop, ...
+//! mc-cli auto bench 10                full-frame stream for 10 s: fps, MB/s, latency
 //! ```
 
 use mc_client::Client;
@@ -16,7 +16,7 @@ use std::time::Instant;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 || args[0] == "-h" || args[0] == "--help" {
-        println!("{}", include_str!("mc-operator.rs").lines().skip(2).take(10).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
+        println!("{}", include_str!("mc-cli.rs").lines().skip(2).take(10).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
         return;
     }
     let host = &args[0];
@@ -26,7 +26,7 @@ fn main() {
     let c = match Client::connect(host, role, &name) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("mc-operator: {e}");
+            eprintln!("mc-cli: {e}");
             std::process::exit(1);
         }
     };
@@ -88,6 +88,6 @@ fn main() {
 }
 
 fn fail(e: std::io::Error) -> Value {
-    eprintln!("mc-operator: {e}");
+    eprintln!("mc-cli: {e}");
     std::process::exit(2);
 }

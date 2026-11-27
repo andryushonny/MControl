@@ -49,6 +49,27 @@ with Microscope() as m:                 # finds the server on the LAN, remembers
 ```
 The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, camera, snap, grid scan, live stream, events, viewers, errors.
 
+## mc-operator: the program on PC 2
+
+`mc-operator.exe` from [Releases](../../releases): the map of the stage with the live picture, selections, scans stitched by [MStitch](https://github.com/andryushonny/MStitch), the lattice of crosses, cutting into squares and the DXF for AutoCAD. Rust, the GPU draws (wgpu: DirectX 12 / Vulkan; `MC_RENDERER=glow` for old OpenGL-only PCs); stitched maps of 10 000+ px are drawn from 512 px tiles at the level the zoom needs.
+
+![mc-operator](docs/img/operator.png)
+
+How a session goes:
+1. **Look around.** Arrows move the picture that way on the screen (Shift: a tenth, Ctrl: a whole field), a double click moves the stage there, the wheel zooms. Wherever the camera stood still a small copy stays on the map (the preview map).
+2. **Select** (S): two clicks are the corners of a rectangle, snapped to the motor step. While drawing it shows how many frames it takes with the objective on the microscope; a selection over the limit is refused. Each selection has its objective, its centre, a colour; the list is the drawing order (top on top).
+3. **Scan.** *Quick scan* / *Quality scan* put it in the **queue**: one scan on the microscope at a time, the previous one stitching beside it (MStitch, quick or quality mode), each map shown as soon as it is stitched. The queue is grouped by objective: the scans for the objective on the microscope go first, then it stops once and asks for the next objective (*20x is on: continue*). Limits, with the overlap: **quick ≤ 1200 frames, quality ≤ 225**.
+4. **Lattice** (L): click 2–3 crosses on a stitched map; each is found to a tenth of a pixel and gets its (X, Y), editable. 2 crosses: square lattice; 3 and more: fitted, with the residual. The red lattice is drawn over everything, with the numbers in the top left corner of each square, once 2 crosses are marked. **Level grid** turns the view (all selections together) so the lattice stands level; the camera does not turn, so selections stay rectangles of the stage and the squares at their edges come out partial.
+5. **Align maps to the lattice**: each map is stitched on its own and placed by the stage, a few µm off; Align finds every lattice cross on it and moves it onto the lattice (shift, or shift, turn and scale), so neighbouring selections meet pixel to pixel.
+6. **Cut and export DXF**: every selection with *cut* ticked is cut along the lattice into squares (PNG, transparent where the selection or its map ends), all on the same lattice: a layer cake of squares, one layer per selection in the order of the list, plus the lattice and its numbers. `drawing.dxf` (AutoCAD 2010, µm) references the squares next to it.
+
+Status bar: the link, the objective, the scan running with frames done and time left, the stitching, the queue and when everything will be done. *Stop* (Space) stops the stage and the scan and pauses the queue.
+
+**Optics, once per objective** (Settings → *Calibrate optics: Measure here*, on a spot with texture): nine frames, the stage moved by a third of the field between them, give the scale, the camera's turn and the **lens distortion** ($p = c + (q - c)(1 + k_1 r^2 + k_2 r^4)$). Frames are corrected before stitching (each Bayer plane on its own, so MStitch still gets raw frames), and so are the live picture and the preview.
+**White balance**: *Pick grey* and click something grey, or *Auto* from the live picture; it applies to the live picture, maps and squares, raw frames stay raw.
+
+The command line is now `mc-cli.exe` (status, goto, snap, bench).
+
 ## How it works
 
 **A snap** gives a still, fresh frame and says where the stage was:
@@ -225,7 +246,7 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 
 ## Build and test
 ```
-cargo build --release                 # target/release/mc-server(.exe), mc-operator, mc-viewer
+cargo build --release                 # target/release/mc-server(.exe), mc-operator (the program), mc-cli, mc-viewer
 uv run pytest                         # integration tests on the simulator
 python docs/diagrams/render.py        # the pictures in this README (node + Chrome)
 ```
