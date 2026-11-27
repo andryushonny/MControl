@@ -77,10 +77,15 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Calib>)
     let _ = link.call(json!({"cmd": "end"}));
     let _ = link.call(json!({"cmd": "goto", "x": here[0], "y": here[1]}));
     shot?;
-    st.lock().unwrap().phase = "matching".into();
-    let mut ms = vec![];
+    st.lock().unwrap().phase = "finding the camera's orientation".into();
     let ((g0, w, h), at0) = &frames[0];
     let (w, h) = (w, h);
+    // the camera may be turned or mirrored against the stage: which of the 8 ways do the frames agree with?
+    let pairs: Vec<(&[f32], P2)> = [5usize, 7].iter().map(|&k| (frames[k].0 .0.as_slice(), [frames[k].1[0] - at0[0], frames[k].1[1] - at0[1]])).collect();
+    let m = orientation(g0, &pairs, *w, *h, o);
+    let o = &Optics { m, k: [0.0, 0.0], ..o.clone() };
+    st.lock().unwrap().phase = "matching".into();
+    let mut ms = vec![];
     for ((g1, _, _), at1) in &frames[1..] {
         let d = [at1[0] - at0[0], at1[1] - at0[1]];
         ms.extend(match_frames(g0, g1, *w, *h, o, d));
@@ -137,6 +142,24 @@ fn undistort_grey(g: &[f32], w: usize, h: usize, o: &Optics) -> Vec<f32> {
 
 #[cfg(test)]
 pub static DEBUG: Mutex<Vec<Match>> = Mutex::new(Vec::new());
+
+/// The camera's m among its 8 orientations (turned by 0, 90, 180, 270 degrees, mirrored or not) against the
+/// stage: the one under which the most patches of frame 0 are found in the moved frames.
+pub fn orientation(g0: &[f32], pairs: &[(&[f32], P2)], w: usize, h: usize, o: &Optics) -> [f64; 4] {
+    let [a, b, c, d] = o.m;
+    // m P, P a signed permutation (acts on the stage side)
+    let ps: [[f64; 4]; 8] = [[1., 0., 0., 1.], [-1., 0., 0., 1.], [1., 0., 0., -1.], [-1., 0., 0., -1.], [0., 1., 1., 0.], [0., -1., 1., 0.], [0., 1., -1., 0.], [0., -1., -1., 0.]];
+    let mut best = (o.m, 0usize);
+    for p in ps {
+        let m = [a * p[0] + b * p[2], a * p[1] + b * p[3], c * p[0] + d * p[2], c * p[1] + d * p[3]];
+        let oo = Optics { m, k: [0.0, 0.0], ..o.clone() };
+        let n: usize = pairs.iter().map(|(g1, dd)| match_frames(g0, g1, w, h, &oo, *dd).len()).sum();
+        if n > best.1 {
+            best = (m, n);
+        }
+    }
+    best.0
+}
 
 /// Patches of frame 0 found in frame 1 (half-size grey pictures), frame 1 taken `d_um` away.
 pub fn match_frames(g0: &[f32], g1: &[f32], w: usize, h: usize, o: &Optics, d_um: P2) -> Vec<Match> {
@@ -393,6 +416,43 @@ pub fn fit(ms: &[Match], frame: [u32; 2]) -> Fit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A camera mirrored in x and turned 90 degrees against the stage: the orientation is found.
+    #[test]
+    fn finds_a_turned_mirrored_camera() {
+        let (w, h) = (648usize, 486usize); // half-size pictures of a 1296 x 972 frame
+        let truth = [0.0, -4.5, -4.5, 0.0]; // stage x -> picture -y, stage y -> picture -x (full-res px per um)
+        // a sample: smooth blobs, seen at the frame centre p (um); half-size pixel (x, y) shows the stage point
+        // p + m^-1 (2 (x + 0.5) - 648, 2 (y + 0.5) - 486)
+        let det = truth[0] * truth[3] - truth[1] * truth[2];
+        let inv = [truth[3] / det, -truth[1] / det, -truth[2] / det, truth[0] / det];
+        // value noise: random levels on a 2 um grid, smoothly between (nothing repeats)
+        let rnd = |i: i64, j: i64| (((i.wrapping_mul(73856093) ^ j.wrapping_mul(19349663)).wrapping_mul(2654435761) >> 7) & 255) as f64;
+        let sample = |x: f64, y: f64| {
+            let (fx, fy) = (x / 2.0, y / 2.0);
+            let (i, j) = (fx.floor() as i64, fy.floor() as i64);
+            let (tx, ty) = (fx - i as f64, fy - j as f64);
+            let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
+            let top = rnd(i, j) * (1.0 - sx) + rnd(i + 1, j) * sx;
+            let bot = rnd(i, j + 1) * (1.0 - sx) + rnd(i + 1, j + 1) * sx;
+            (top * (1.0 - sy) + bot * sy) as f32
+        };
+        let shot = |p: P2| {
+            let mut g = vec![0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let (du, dv) = (2.0 * (x as f64 + 0.5) - 648.0, 2.0 * (y as f64 + 0.5) - 486.0);
+                    g[y * w + x] = sample(p[0] + inv[0] * du + inv[1] * dv, p[1] + inv[2] * du + inv[3] * dv);
+                }
+            }
+            g
+        };
+        let g0 = shot([0.0, 0.0]);
+        let (gx, gy) = (shot([60.0, 0.0]), shot([0.0, 45.0]));
+        let guess = Optics::guess("x", 1.0 / 4.5, [1296, 972]);
+        let m = orientation(&g0, &[(&gx, [60.0, 0.0]), (&gy, [0.0, 45.0])], w, h, &guess);
+        assert!(m.iter().zip(truth).all(|(a, b)| (a - b).abs() < 1e-9), "{m:?}");
+    }
 
     /// Features seen through a distorting lens at several stage positions: the fit finds the lens and m back.
     #[test]

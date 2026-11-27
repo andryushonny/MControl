@@ -467,6 +467,27 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.label("Camera exposure, ms");
             camera(app, ui);
             ui.end_row();
+            ui.label("Camera orientation");
+            ui.horizontal(|ui| {
+                // m P with P a signed permutation: the picture turned / mirrored against the stage
+                let mut apply = |p: [f64; 4]| {
+                    let [a, b, c, d] = app.proj.optics().m;
+                    app.proj.optics_mut().m = [a * p[0] + b * p[2], a * p[1] + b * p[3], c * p[0] + d * p[2], c * p[1] + d * p[3]];
+                    app.proj.optics_mut().profile_path = None;
+                    app.thumbs.clear();
+                    true
+                };
+                if ui.button("Turn 90°").on_hover_text("if the live picture moves 90° off when the stage moves").clicked() {
+                    changed |= apply([0.0, -1.0, 1.0, 0.0]);
+                }
+                if ui.button("Mirror x").clicked() {
+                    changed |= apply([-1.0, 0.0, 0.0, 1.0]);
+                }
+                if ui.button("Mirror y").clicked() {
+                    changed |= apply([1.0, 0.0, 0.0, -1.0]);
+                }
+            });
+            ui.end_row();
             ui.label("Lens distortion k1, k2");
             ui.horizontal(|ui| {
                 changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().k[0]).speed(0.0005).range(-0.5..=0.5).fixed_decimals(4)).changed();
