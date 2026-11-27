@@ -963,16 +963,37 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
             ui.label(format!("taking frames {}/{}...", j.done, j.total));
         }
         if app.corner.is_some() {
-            ui.label(RichText::new("Which edge of the corner runs left-right for you (on the map, from the corner)?").color(Color32::from_rgb(250, 200, 80)));
+            ui.label(RichText::new("Corner found. Its two edges are drawn on the map, red and blue. Which one runs left-right for you? To see it: Show me, and watch the substrate on the stage itself, not the screen.").color(Color32::from_rgb(250, 200, 80)));
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("The red one").color(Color32::from_rgb(240, 90, 70))).clicked() {
-                    app.corner_answer(0);
-                }
-                if ui.button(RichText::new("The blue one").color(Color32::from_rgb(90, 160, 255))).clicked() {
-                    app.corner_answer(1);
+                if ui.button("Show me").on_hover_text("the stage goes 1 mm along the red edge and comes back").clicked() {
+                    app.corner_show();
                 }
                 if ui.button("Cancel").clicked() {
                     app.corner = None;
+                    app.corner_shown = false;
+                }
+            });
+            if app.corner_shown {
+                ui.label("The substrate went:");
+                ui.horizontal(|ui| {
+                    if ui.button("left and right").clicked() {
+                        app.corner_answer(0);
+                    }
+                    if ui.button("away and back towards me").clicked() {
+                        app.corner_answer(1);
+                    }
+                    if ui.button("Again").clicked() {
+                        app.corner_show();
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("or, if you can tell on the map:").weak().size(11.5));
+                if ui.small_button(RichText::new("red runs left-right").color(Color32::from_rgb(240, 90, 70))).clicked() {
+                    app.corner_answer(0);
+                }
+                if ui.small_button(RichText::new("blue runs left-right").color(Color32::from_rgb(90, 160, 255))).clicked() {
+                    app.corner_answer(1);
                 }
             });
         }

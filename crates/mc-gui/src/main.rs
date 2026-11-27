@@ -147,6 +147,8 @@ pub struct App {
     /// frames being taken; then the corner found, waiting for which edge runs left-right
     pub corner_job: Option<([f64; 2], Arc<Mutex<corner::Job>>)>,
     pub corner: Option<([f64; 2], corner::Corner)>,
+    /// the stage went along the corner's red edge and back: waiting for which way the operator saw it go
+    pub corner_shown: bool,
     /// the arrows move the stage itself the way they point (else the picture: the view goes that way)
     pub arrows_move_stage: bool,
     /// a flat field being taken
@@ -228,6 +230,7 @@ impl App {
             flat_job: None,
             corner_job: None,
             corner: None,
+            corner_shown: false,
             arrows_move_stage: stored("arrows_move_stage").as_deref() == Some("true"),
             settings_open: false,
             frame_no: 0,
@@ -413,18 +416,31 @@ impl App {
                     self.changed();
                 }
                 self.corner = Some((name, c));
+                self.corner_shown = false;
                 self.follow = true;
-                self.message = "corner found. Which of its two edges (red, blue) runs left-right for you? (Controls)".into();
+                self.message = "corner found: now Controls, Show me (the stage goes 1 mm along the red edge and back)".into();
                 self.controls_open = true;
             }
             Err(e) => self.message = format!("corner: {e}"),
         }
     }
 
+    /// The stage goes 1 mm along the corner's red edge and back, slowly enough to be seen: does the substrate
+    /// go left-right or towards / away from the operator?
+    pub fn corner_show(&mut self) {
+        let Some((_, c)) = &self.corner else { return };
+        let e = c.edges()[0];
+        let d = 1000.0;
+        self.link.send(serde_json::json!({"cmd": "move", "dx": e[0] * d, "dy": e[1] * d}));
+        self.link.send(serde_json::json!({"cmd": "move", "dx": -e[0] * d, "dy": -e[1] * d}));
+        self.corner_shown = true;
+    }
+
     /// The operator says which edge of the corner runs left-right for them (0 red, 1 blue): the screen is turned
     /// and mirrored to show the substrate as they see it, the arrows set the same way.
     pub fn corner_answer(&mut self, horizontal: usize) {
         let Some((name, c)) = self.corner.take() else { return };
+        self.corner_shown = false;
         let [r, u] = corner::right_up(&c, name, horizontal);
         // the screen: right on the screen = right for the operator, up = up (screen y grows downwards)
         let mut best = (f64::MIN, (false, false, false, 0));

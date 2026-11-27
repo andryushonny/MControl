@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.9
+- From a corner: which edge runs left-right is answered by watching the stage: *Show me* moves it 1 mm along the red edge and back; the substrate went left-right, or away and back. (Telling it from the map alone is still there.)
+
 ## 0.6.8
 - Controls, the arrows: *left with right* and *up with down* together with *swap* work as named: first the keys are exchanged (the right key does what the left one did), then swapped. Before, with *swap* on, *left with right* changed the up / down keys instead.
 
