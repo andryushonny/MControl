@@ -120,11 +120,12 @@ pub struct Job {
 pub struct Server {
     refused: Mutex<HashMap<IpAddr, u64>>,
     /// One queue for everything that changes the instrument: commands run one after another, in the order
-    /// they came, each with a number `n`; a chain runs as one, nothing gets between its steps.
+    /// they came, each with a number `n`; inside a block (begin .. end) only that client's commands run.
     queue: Mutex<VecDeque<Job>>,
     queue_cv: Condvar,
     next_n: AtomicU64,
-    cancel: AtomicU64, // bumped by stop: the running chain ends, queued commands are dropped
+    cancel: AtomicU64, // bumped by stop: a running wait ends, queued commands are dropped
+    exclusive: Mutex<Option<(Arc<Session>, u64)>>, // an open block: its client, and when it last did something
     history: Mutex<VecDeque<Value>>,
     pub stage: Arc<Stage>,
     pub cam: Arc<Camera>,
@@ -155,7 +156,7 @@ fn f3(v: &Value, k: &str) -> Option<f64> {
 impl Server {
     pub fn new(stage: Arc<Stage>, cam: Arc<Camera>, hub: Arc<Hub>, cfg: Cfg) -> Arc<Server> {
         Arc::new(Server { refused: Mutex::new(HashMap::new()), queue: Mutex::new(VecDeque::new()), queue_cv: Condvar::new(),
-                          next_n: AtomicU64::new(0), cancel: AtomicU64::new(0), history: Mutex::new(VecDeque::new()),
+                          next_n: AtomicU64::new(0), cancel: AtomicU64::new(0), exclusive: Mutex::new(None), history: Mutex::new(VecDeque::new()),
                           stage, cam, hub, sessions: Mutex::new(Vec::new()), lease: Mutex::new(None), cfg, started: now_ns() })
     }
 
@@ -504,9 +505,10 @@ impl Server {
         }
         match cmd.as_str() {
             "stop" => {
-                // not queued: at once. The stage stops, the running chain ends, waiting commands are dropped
+                // not queued: at once. The stage stops, a block ends, waiting commands are dropped
                 self.stage.stop();
                 self.cancel.fetch_add(1, Ordering::SeqCst);
+                *self.exclusive.lock().unwrap() = None;
                 let dropped: Vec<Job> = self.queue.lock().unwrap().drain(..).collect();
                 let n = self.next_n.fetch_add(1, Ordering::SeqCst) + 1;
                 self.report(sess, &cmd, &v, Ok(&json!({"dropped": dropped.len()})), 0.0, n);
@@ -525,17 +527,6 @@ impl Server {
                 self.event("operator", json!({"name": null}));
                 sess.send(&ok(&id, json!({"n": n})));
                 return;
-            }
-            "chain" => {
-                let steps = v["steps"].as_array().map(|a| a.len()).unwrap_or(0);
-                let bad = v["steps"].as_array().and_then(|a| {
-                    a.iter().map(|st| st["cmd"].as_str().unwrap_or("")).find(|c| matches!(*c, "" | "stop" | "release" | "chain"))
-                });
-                if steps == 0 || steps > 500 || bad.is_some() {
-                    let e = McError::new("E101", "chain: 1..500 steps, each a command other than stop / release / chain");
-                    sess.send(&err(&id, &e));
-                    return;
-                }
             }
             _ => {}
         }
@@ -571,28 +562,58 @@ impl Server {
         }
     }
 
+    /// The next job: the oldest one, or inside a block the oldest of the block's client. A block ends with
+    /// "end", with stop, when its client leaves or loses control, or after 30 s without a command from it.
+    fn take_job(&self) -> Job {
+        let mut q = self.queue.lock().unwrap();
+        loop {
+            let ex = self.exclusive.lock().unwrap().clone();
+            let pick = match &ex {
+                None => (!q.is_empty()).then_some(0),
+                Some((s, last)) => {
+                    if !s.alive.load(Ordering::Relaxed) || !self.holds(s) || now_ns() - last > 30_000_000_000 {
+                        warn!("NET", "Block of {} ended: {}", s.name,
+                              if now_ns() - last > 30_000_000_000 { "no command for 30 s" } else { "its client left" });
+                        *self.exclusive.lock().unwrap() = None;
+                        continue;
+                    }
+                    q.iter().position(|j| Arc::ptr_eq(&j.sess, s))
+                }
+            };
+            if let Some(i) = pick {
+                return q.remove(i).unwrap();
+            }
+            q = self.queue_cv.wait_timeout(q, Duration::from_millis(200)).unwrap().0;
+        }
+    }
+
     /// Runs the queue: one command at a time, in order. Replies carry `n`, so the client can match them.
     fn executor(self: Arc<Self>) {
         loop {
-            let job = {
-                let mut q = self.queue.lock().unwrap();
-                loop {
-                    if let Some(j) = q.pop_front() {
-                        break j;
-                    }
-                    q = self.queue_cv.wait(q).unwrap();
-                }
-            };
+            let job = self.take_job();
             if !job.sess.alive.load(Ordering::Relaxed) || !self.holds(&job.sess) {
                 let e = McError::new("E103", "control changed hands before its turn");
                 self.report(&job.sess, &job.cmd, &job.v, Err(&e), 0.0, job.n);
                 job.sess.send(&err(&job.id, &e));
                 continue;
             }
-            let cancel = self.cancel.load(Ordering::SeqCst);
             self.event("command", json!({"state": "started", "n": job.n, "by": job.sess.name, "cmd": job.cmd, "args": cmd_args_json(&job.v)}));
             let t0 = now_ns();
-            let r = if job.cmd == "chain" { self.run_chain(&job, cancel) } else { self.run_cmd(&job.sess, &job.cmd, &job.v) };
+            let r = match job.cmd.as_str() {
+                // a block: from "begin" to "end" only this client's commands run (see take_job)
+                "begin" => {
+                    *self.exclusive.lock().unwrap() = Some((job.sess.clone(), now_ns()));
+                    Ok(json!({}))
+                }
+                "end" => {
+                    *self.exclusive.lock().unwrap() = None;
+                    Ok(json!({}))
+                }
+                _ => self.run_cmd(&job.sess, &job.cmd, &job.v),
+            };
+            if let Some(e) = self.exclusive.lock().unwrap().as_mut() {
+                e.1 = now_ns(); // the block is alive
+            }
             let ms = (now_ns() - t0) as f64 / 1e6;
             self.report(&job.sess, &job.cmd, &job.v, r.as_ref(), ms, job.n);
             match r {
@@ -611,31 +632,6 @@ impl Server {
         }
     }
 
-    /// The steps of a chain, back to back. A failed step ends it (unless stop_on_error is false); stop ends it too.
-    fn run_chain(&self, job: &Job, cancel: u64) -> McResult<Value> {
-        let steps = job.v["steps"].as_array().cloned().unwrap_or_default();
-        let stop_on_error = job.v["stop_on_error"].as_bool().unwrap_or(true);
-        let mut results = Vec::new();
-        for (i, st) in steps.iter().enumerate() {
-            if self.cancel.load(Ordering::SeqCst) != cancel {
-                return Err(McError::new("E116", format!("at step {} of {}", i + 1, steps.len())));
-            }
-            let c = st["cmd"].as_str().unwrap_or("");
-            let t0 = now_ns();
-            let r = self.run_cmd(&job.sess, c, st);
-            let mut v = st.clone();
-            v["chain"] = json!(job.n);
-            v["step"] = json!(i + 1);
-            self.report(&job.sess, c, &v, r.as_ref(), (now_ns() - t0) as f64 / 1e6, job.n);
-            match r {
-                Ok(x) => results.push(x),
-                Err(e) if stop_on_error => return Err(McError::new(e.code, format!("step {} of {} ({c}): {}", i + 1, steps.len(), e.detail))),
-                Err(e) => results.push(json!({"error": e.json()})),
-            }
-        }
-        Ok(json!({"results": results}))
-    }
-
     fn run_cmd(&self, sess: &Arc<Session>, cmd: &str, v: &Value) -> McResult<Value> {
         let gen = self.stage.gen();
         let xyz = |a: &str, b: &str, c: &str| [f3(v, a), f3(v, b), f3(v, c)];
@@ -649,7 +645,7 @@ impl Server {
                 self.stage.call(move |w| w.move_to(t, gen))
             }
             "snap" => self.snap(sess, v, gen),
-            "wait" => {
+            "sleep" => {
                 // a pause in the queue (e.g. let the sample settle); stop ends it
                 let cancel = self.cancel.load(Ordering::SeqCst);
                 let end = now_ns() + (f3(v, "ms").unwrap_or(0.0).clamp(0.0, 60_000.0) * 1e6) as u64;
@@ -838,25 +834,16 @@ impl Server {
         if is_read(cmd) {
             return;
         }
-        // a step of a chain is "#12.3": chain 12, step 3
-        let tag_n = match v["step"].as_u64() {
-            Some(st) => format!("#{n}.{st}"),
-            None => format!("#{n}"),
-        };
+        let tag_n = format!("#{n}");
         let mut args = cmd_args_json(v);
         if let Some(o) = args.as_object_mut() {
-            o.remove("chain");
             o.remove("step");
-            if cmd == "chain" {
-                o.remove("steps"); // each step is reported on its own
-                o.remove("stop_on_error");
-            }
         }
         let shown = cmd_args(&args);
         // after the number the line still starts with a capital, like every other log line
         let title: String = cmd.chars().take(1).flat_map(char::to_uppercase).chain(cmd.chars().skip(1)).collect();
         let by = paint(DIM, &format!("{ms:.0} ms  by {}", sess.name));
-        let mut ev = json!({"n": n, "step": v["step"], "by": sess.name, "role": sess.role.name(), "cmd": cmd, "args": args,
+        let mut ev = json!({"n": n, "by": sess.name, "role": sess.role.name(), "cmd": cmd, "args": args,
                             "ms": ms.round(), "t_wall_ms": mc_proto::clock::wall_ms()});
         match r {
             Err(e) => {
@@ -870,8 +857,6 @@ impl Server {
                     format!("at ({p})")
                 } else if let Some(seq) = r.get("seq") {
                     format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
-                } else if let Some(k) = r.get("results").and_then(|x| x.as_array()) {
-                    format!("{} steps", k.len())
                 } else {
                     String::new()
                 };
@@ -882,7 +867,6 @@ impl Server {
                 if let Some(o) = result.as_object_mut() {
                     o.remove("id");
                     o.remove("ok");
-                    o.remove("results"); // a chain's results went out step by step
                 }
                 ev["state"] = json!("done");
                 ev["result"] = result;

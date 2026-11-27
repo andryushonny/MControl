@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+- Scripts read as plain Python: `m.goto()`, `m.move()`, `m.sleep()`, `m.snap()` straight on the microscope, one per line.
+- `with m.block():` instead of chains: the commands inside run with nothing from other clients between them; each returns its result at once. A block ends with the `with`, on stop, when its client leaves, or after 30 s idle.
+
 ## 0.3.1
 - Log: queued commands as `#n Snap ...`, with a capital after the number.
 

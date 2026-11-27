@@ -1,8 +1,8 @@
 """Events the server sends to every client, and one line of text for each.
 
-    command    {state: queued|started|done|failed, n, step, by, role, cmd, args, result, summary, error, ms}
+    command    {state: queued|started|done|failed, n, by, role, cmd, args, result, summary, error, ms}
                every action of the operator (or its assistant): moves, snaps, light, laser, camera settings, stop.
-               n numbers them in the order the server runs them; a chain's steps share its n (step 1, 2, ...)
+               n numbers them in the order the server runs them; begin / end mark a block
     message    {n, from, role, to, data, reply_to}   between clients (e.g. MStitch and the operator's script)
     client     {action: connected|disconnected|..., role, name, addr, after_s}
     operator   {name, addr}            who holds control now (name None: nobody)
@@ -24,7 +24,7 @@ def describe(ev: dict) -> str:
     t = time.strftime("%H:%M:%S")
     if "t_wall_ms" in ev:                       # from history(): the time it happened
         t = time.strftime("%H:%M:%S", time.localtime(ev["t_wall_ms"] / 1000))
-    num = f"#{ev['n']}" + (f".{ev['step']}" if ev.get("step") else "") if "n" in ev else ""
+    num = f"#{ev['n']}" if "n" in ev else ""
     if k == "command":
         head = f"{num} {ev['by']}: {ev['cmd']} {_args(ev.get('args'))}".strip()
         st = ev.get("state")

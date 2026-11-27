@@ -71,17 +71,22 @@ The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, came
 
 \* a real microscope frame with about 2 DN of sensor noise; the noise decides how small frames get. On PC 1 the packing takes about 5–20 ms per frame (lossless / JPEG planes in parallel); `mc-server codec-bench` measures it on your PC. `Frame.codec` says how a frame came, `Frame.exact` whether its pixels are the sensor's; `Frame.raw()` unpacks.
 
-**One queue, in order.** Everything that changes the instrument goes into one queue on PC 1 and runs one command at a time, in the order it came, each with a number `#n`. A **chain** runs as one block: nothing gets between its steps. `stop` does not wait: the stage stops at once, the running chain ends and what waits behind it is dropped (E116). Reads (status, camera state, history) are not queued.
+**One queue, in order.** Everything that changes the instrument goes into one queue on PC 1 and runs one command at a time, in the order it came, each with a number `#n`. A script is plain Python, one command per line, and each line waits for its result. Inside `with m.block():` nothing from another client (an assistant such as MStitch) gets between your commands. `stop` does not wait: the stage stops at once, a block ends and what waits behind it is dropped (E116). Reads (status, camera state, history) are not queued.
 
 ![queue](docs/img/queue.png)
 
 ```python
-# one scan step: no other command can get in between
-frames = m.chain().goto(x=0, y=0).wait(50).snap(settle_ms=20).goto(x=300).snap(settle_ms=20).run()
+frames = []
+for y in range(0, 900, 300):
+    for x in range(0, 900, 300):
+        with m.block():                 # nothing from anyone else between these lines
+            m.goto(x=x, y=y)
+            m.sleep(0.05)               # let it settle
+            frames.append(m.snap())
 
-for e in m.history(limit=20):      # what was done, by whom, in which order (the server keeps 2000)
-    print(describe(e))             # 14:02:11  #41.3 PC-2: snap settle_ms=20  frame 512 at (0.0, 0.0, 0.0)  (83 ms)
-m.queued()                          # what still waits
+for e in m.history(limit=20):           # what was done, by whom, in which order (the server keeps 2000)
+    print(describe(e))                  # 14:02:11  #41 PC-2: snap  frame 512 at (300.0, 0.0, 0.0)  (83 ms)
+m.queued()                              # what still waits
 ```
 
 **Assistant and messages (for MStitch).** A program next to the operator's script, such as the stitcher, joins as an `Assistant`: it has the operator's rights and puts its commands into the same queue, while that operator holds control. On the operator's PC it joins without a key; on another PC it needs the operator's `m.lease_key`. Clients can also send each other messages through the server and wait for an answer:
@@ -120,7 +125,8 @@ Viewer().watch()          # prints every operator action, like the server log
 | `m.snap(...)` | `x/y/z` absolute or `dx/dy/dz` relative, `settle_ms`; returns a `Frame` |
 | `m.live(seconds=, count=, fps=)` | live frames while you loop: `for f in m.live(seconds=5): ...` |
 | `m.latest()`, `m.fetch(seq)` | the newest frame; a re-fetch from the server ring |
-| `m.chain()` | `.goto() .move() .snap() .wait(ms) .light() .laser() .exposure() .gain() .add(cmd, ...)`, then `.run()` → one result per step (Frames for snaps) |
+| `m.goto(x, y, z)`, `m.move(dx, dy, dz)`, `m.sleep(s)`, `m.snap()` | the everyday commands, one per line, each in its turn |
+| `with m.block():` | the commands inside run with nothing from other clients between them |
 | `m.history(limit, since)`, `m.queued()` | the server's record of commands and messages; what still waits |
 | `Assistant(name=, lease_key=)` | a helper with the operator's rights, through the same queue (MStitch) |
 | `send(to, data)`, `on_message(fn)`, `request(to, data)`, `reply(msg, data)` | messages between clients: `"operator"`, `"all"` or a name |
@@ -214,7 +220,7 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 * **Data** on TCP 5161: `{"session":..., "want":"raw"|"preview", "codec":"auto"|"lossless"|"jpeg"|"raw", "quality":92}`, then frames `[len][kind=2][u32 header length][header JSON][payload]`. The header's `codec` says how the payload is packed: `lossless` = zstd of the difference to the same-colour pixel two to the left (first two columns: two rows up), wrapping; `jpeg` = 4 × `[u32 length][JPEG]` for the Bayer planes (x, y) = (0,0), (1,0), (0,1), (1,1).
 * **Discovery**: UDP broadcast `MCONTROL?` to port 5159; the answer has the name, the real ports and whether a token is needed.
 * **Events**: `command` (`state`: queued / started / done / failed, `n`, `step`, `by`, `cmd`, `args`, `result`, `ms`), `message`, `client`, `operator`, `safe`, `error`, `telemetry`.
-* **Queue**: replies to queued commands carry `n`. `chain` = `{"cmd":"chain","steps":[{...},...],"stop_on_error":true}` → `{"results":[...]}`; `wait` = `{"cmd":"wait","ms":50}`; `history` = `{"since":n,"limit":100}` → `{"history":[...],"queued":[...]}`; `send` = `{"to":"operator","data":{...},"reply_to":n}`. Role `assistant` joins with `"join": lease_key` (or from the operator's own address).
+* **Queue**: replies to queued commands carry `n`. `begin` … `end` = a block (only this client's commands run in between); `sleep` = `{"cmd":"sleep","ms":50}`; `history` = `{"since":n,"limit":100}` → `{"history":[...],"queued":[...]}`; `send` = `{"to":"operator","data":{...},"reply_to":n}`. Role `assistant` joins with `"join": lease_key` (or from the operator's own address).
 * **Clock**: `ping {t1}` → `{t1,t2,t3}`. The offset comes from the sample with the smallest round trip among the last 32.
 
 ## Build and test

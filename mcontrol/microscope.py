@@ -2,6 +2,7 @@
 stage, camera, light, laser, cooler — each a small object on the same link."""
 import threading
 import time
+from contextlib import contextmanager
 
 from .errors import McError
 from .events import describe
@@ -287,18 +288,42 @@ class Microscope(_Client):
         """Give this to an Assistant on another PC (on this PC it joins without it)."""
         return self.link.lease_key
 
-    def chain(self, stop_on_error=True):
-        """Commands that run back to back, nothing in between (a scan step: move, wait, snap ...):
+    # --- the everyday commands, straight on the microscope: m.goto(), m.sleep(), m.snap() ...
+    def goto(self, x=None, y=None, z=None):
+        """Move to absolute coordinates, um (axes left out stay). Returns the position."""
+        return self.stage.goto(x, y, z)
 
-            frames = m.chain().goto(x=0, y=0).wait(50).snap().goto(x=300).snap().run()
+    def move(self, dx=None, dy=None, dz=None):
+        """Move by so many um. Returns the position."""
+        return self.stage.move(dx, dy, dz)
 
-        or  `with m.chain() as c: c.light(3).snap(x=10)`  (runs on leaving the block; results in c.results).
-        A failed step ends the chain (stop_on_error); stop() ends it too. run() returns one result per step,
-        Frames for snaps."""
-        return Chain(self, stop_on_error)
+    def sleep(self, seconds):
+        """Pause, in the server's queue: the next command starts that much later."""
+        self.link.call("sleep", idempotent=True, ms=seconds * 1000.0)
+
+    @contextmanager
+    def block(self):
+        """Commands inside run one after another with nothing from anyone else between them
+        (e.g. an assistant such as MStitch):
+
+            with m.block():
+                m.goto(x=0, y=0)
+                m.sleep(0.05)
+                f = m.snap()
+
+        Each command still returns its result at once. The block ends when the `with` ends, on stop(),
+        if this client leaves, or after 30 s without a command."""
+        self.link.call("begin")
+        try:
+            yield self
+        finally:
+            try:
+                self.link.call("end")
+            except McError:
+                pass                            # stop() or a lost link ended it already
 
     def stop(self):
-        """Stage stops now; the running chain ends and waiting commands are dropped (E116)."""
+        """Stage stops now; a block ends and waiting commands are dropped (E116)."""
         self.stage.stop()
 
     def release(self):
@@ -308,57 +333,6 @@ class Microscope(_Client):
 
 def _xyz(**kw):
     return {k: float(v) for k, v in kw.items() if v is not None}
-
-
-class Chain:
-    """Steps for Microscope.chain(). Every method adds a step and returns the chain, so steps can be strung."""
-
-    def __init__(self, m, stop_on_error=True):
-        self._m, self.stop_on_error, self.steps, self.results = m, stop_on_error, [], None
-
-    def add(self, cmd, **args):
-        self.steps.append({"cmd": cmd, **{k: v for k, v in args.items() if v is not None}})
-        return self
-
-    def goto(self, x=None, y=None, z=None):
-        return self.add("goto", **_xyz(x=x, y=y, z=z))
-
-    def move(self, dx=None, dy=None, dz=None):
-        return self.add("move", **_xyz(dx=dx, dy=dy, dz=dz))
-
-    def snap(self, x=None, y=None, z=None, dx=None, dy=None, dz=None, settle_ms=None):
-        return self.add("snap", **_xyz(x=x, y=y, z=z, dx=dx, dy=dy, dz=dz, settle_ms=settle_ms))
-
-    def wait(self, ms):
-        return self.add("wait", ms=ms)
-
-    def light(self, level):
-        return self.add("light", level=int(level))
-
-    def laser(self, mw):
-        return self.add("laser", mw=int(mw))
-
-    def exposure(self, ms):
-        return self.add("exposure", ms=ms)
-
-    def gain(self, value):
-        return self.add("gain", value=value)
-
-    def run(self, timeout=None) -> list:
-        m = self._m
-        s = m.stream if any(st["cmd"] == "snap" for st in self.steps) else None
-        # safe to send again after a reconnect only if every step is absolute
-        again = all(st["cmd"] != "move" and not any(k in st for k in ("dx", "dy", "dz")) for st in self.steps)
-        r = m.link.call("chain", idempotent=again, timeout=timeout, steps=self.steps, stop_on_error=self.stop_on_error)
-        self.results = [s.frame(x["seq"]) if s and isinstance(x, dict) and "seq" in x else x for x in r["results"]]
-        return self.results
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, kind, *rest):
-        if kind is None:
-            self.run()
 
 
 class Assistant(Microscope):

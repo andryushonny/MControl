@@ -256,23 +256,34 @@ def test_commands_run_in_order(server):
         assert sorted(done) == [e["n"] for e in h][-8:]
 
 
-def test_chain_and_stop(server):
-    with Microscope(HOST) as m:
-        frames = m.chain().goto(x=0, y=0).wait(30).snap(x=200).light(2).snap(dx=100).run()
-        assert frames[2].xyz_um[0] == pytest.approx(200, abs=6)
-        assert frames[4].xyz_um[0] == pytest.approx(300, abs=6)
-        n = [e for e in m.history(limit=20) if e.get("step")]
-        assert [e["step"] for e in n][-5:] == [1, 2, 3, 4, 5] and len({e["n"] for e in n[-5:]}) == 1
-        # stop ends a running chain and drops what waits behind it
-        import threading
+def test_block_and_stop(server):
+    import threading
+    from mcontrol import Assistant
+    with Microscope(HOST) as m, Assistant(HOST, name="other") as a:
+        order = []
+        def other():                                      # tries to get in between, from another client
+            a.goto(x=777)
+            order.append("other")
+        with m.block():
+            m.goto(x=0, y=0)
+            t = threading.Thread(target=other); t.start()
+            time.sleep(0.3)
+            m.sleep(0.1)
+            f = m.snap(x=200)                              # results come at once, as usual
+            order.append("block")
+            assert f.xyz_um[0] == pytest.approx(200, abs=6)
+        t.join()
+        assert order == ["block", "other"]                # the other command waited until the block ended
+        assert m.stage.position[0] == pytest.approx(777, abs=6)
+        # stop ends a block and drops what waits behind it
         out = {}
-        t = threading.Thread(target=lambda: out.setdefault("chain", _catch(lambda: m.chain().wait(3000).goto(x=500).run())))
-        t2 = threading.Thread(target=lambda: out.setdefault("goto", _catch(lambda: m.stage.goto(x=900))))
+        t = threading.Thread(target=lambda: out.setdefault("sleep", _catch(lambda: m.sleep(3))))
+        t2 = threading.Thread(target=lambda: out.setdefault("goto", _catch(lambda: m.goto(x=900))))
         t.start(); time.sleep(0.3); t2.start(); time.sleep(0.3)
         m.stop()
         t.join(); t2.join()
-        assert out["chain"] == "E116" and out["goto"] == "E116"
-        assert m.stage.position[0] < 450                   # neither move happened
+        assert out["sleep"] == "E116" and out["goto"] == "E116"
+        assert m.stage.position[0] < 800                   # the move never happened
 
 
 def _catch(fn):
