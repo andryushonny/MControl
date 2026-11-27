@@ -1,7 +1,8 @@
 # Changelog
 
 ## 0.6.2
-- Camera orientation without tilt: *Orientation* picks one of the 8 straight ways only (0/90/180/270 degrees, mirrored or not) and the scale; buttons *Rotate 180*, *Mirror x*, *Mirror y*, *Straight* (takes a tilt away); the current orientation is shown.
+- Camera orientation without tilt: *Orientation* picks one of the 8 straight ways only (0/90/180/270 degrees, mirrored or not) and the scale; buttons *Rotate 90*, *Rotate 180*, *Mirror x*, *Mirror y*, *Straight* (takes a tilt away); the current orientation is shown.
+- Controls, the arrows: *Exchange left with right*, *up with down*, *up/down with left/right* — only which way they move the stage, the picture stays; on top of taught arrows too.
 
 ## 0.6.1
 - mc-server has a web page for anyone in the lab: `http://<PC 1>:8080` (shown in the banner; `--web-port N`, `--no-web`), inside the exe. The live picture (small MJPEG; each open page takes one viewer place), what the operator's program is doing (state, task, progress bar, time left and when it will be done, or when it finished), the operator's PC and address, project, sample, objective, queue, the stage, light and laser, and the last 10 commands. For computers, laptops and tablets. Read only.

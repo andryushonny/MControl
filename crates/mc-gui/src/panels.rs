@@ -511,6 +511,9 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     app.thumbs.clear();
                     true
                 };
+                if ui.button("Rotate 90").clicked() {
+                    changed |= apply([0.0, -1.0, 1.0, 0.0]);
+                }
                 if ui.button("Rotate 180").clicked() {
                     changed |= apply([-1.0, 0.0, 0.0, -1.0]);
                 }
@@ -954,6 +957,14 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
             }
         });
         ui.horizontal(|ui| {
+            ui.label("Exchange:");
+            ui.checkbox(&mut app.arrow_rev_x, "left with right");
+            ui.checkbox(&mut app.arrow_rev_y, "up with down");
+            ui.checkbox(&mut app.arrow_swap, "up/down with left/right");
+        })
+        .response
+        .on_hover_text("only which way the arrows move the stage; the picture does not change");
+        ui.horizontal(|ui| {
             match app.arrow_dirs {
                 Some([r, u]) => ui.label(RichText::new(format!("right arrow: {}, up arrow: {} (left and down: the opposite)", name_of(r), name_of(u))).size(11.5)),
                 None => ui.label(RichText::new("the arrows follow the screen").size(11.5)),
@@ -978,6 +989,9 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
                 app.thumbs.clear();
                 app.changed();
             };
+            if ui.button("Rotate 90").clicked() {
+                apply(app, [0.0, -1.0, 1.0, 0.0]);
+            }
             if ui.button("Rotate 180").clicked() {
                 apply(app, [-1.0, 0.0, 0.0, -1.0]);
             }
