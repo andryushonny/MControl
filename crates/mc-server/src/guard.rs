@@ -30,10 +30,11 @@ pub fn guard_main(args: &[String]) -> ! {
         match sock.recv_from(&mut b) {
             Ok((n, _)) if &b[..n] == b"bye" => std::process::exit(0),
             Ok((_, from)) => {
-                let _ = sock.send_to(b"ok", from);    // the server waits for this before it takes clients
                 if !seen {
+                    // logged before the answer, so the line comes before the server's address table
                     info!("GUARD", "watching the server (pid {pid}): if it stops answering for {:.0} s, the guard stops the stage and switches the laser off", dead_ms as f64 / 1000.0);
                 }
+                let _ = sock.send_to(b"ok", from); // the server waits for this before it takes clients
                 seen = true;
                 last = now_ns();
             }

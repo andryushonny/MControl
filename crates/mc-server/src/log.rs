@@ -74,25 +74,57 @@ pub fn log(level: Level, tag: &str, msg: &str) {
         return;
     }
     let t = local_time();
+    let msg = sentence(msg);
     let _g = LOCK.lock().unwrap();
+    // fixed-width level column, so the level is seen before anything else
     let (lc, lv) = match level {
-        Level::Debug => (DIM, ""),
-        Level::Info => ("", ""),
-        Level::Warn => (YELLOW, "warning: "),
-        Level::Error => (BRED, "ERROR: "),
+        Level::Debug => (DIM, "DEBUG"),
+        Level::Info => (GREEN, "INFO "),
+        Level::Warn => ("\x1b[1;33m", "WARN "),
+        Level::Error => (BRED, "ERROR"),
     };
     let line = if color() {
-        format!("{DIM}{t}{RESET}  {}{tag:<6}{RESET} {lc}{lv}{msg}{RESET}\n", tag_color(tag))
+        let body = match level {
+            Level::Warn => format!("{YELLOW}{msg}{RESET}"),
+            Level::Error => format!("{BRED}{msg}{RESET}"),
+            Level::Debug => format!("{DIM}{msg}{RESET}"),
+            Level::Info => msg.clone(),
+        };
+        format!("{DIM}{t}{RESET}  {lc}{lv}{RESET}  {}{tag:<6}{RESET} {body}\n", tag_color(tag))
     } else {
-        format!("{t}  {tag:<6} {lv}{msg}\n")
+        format!("{t}  {lv}  {tag:<6} {msg}\n")
     };
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
     if let Some(f) = FILE.lock().unwrap().as_mut() {
-        let plain = format!("{} {t}  {tag:<6} {lv}{}\n", today(), strip(msg));
+        let plain = format!("{} {t}  {lv}  {tag:<6} {}\n", today(), strip(&msg));
         let _ = f.write_all(plain.as_bytes());
     }
+}
+
+/// Every message starts with a capital letter, whoever wrote it (colour codes and +/-/→ marks skipped).
+fn sentence(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut done = false;
+    let mut esc = false;
+    for ch in msg.chars() {
+        if !done && !esc && ch.is_alphabetic() {
+            out.extend(ch.to_uppercase());
+            done = true;
+            continue;
+        }
+        if !done && !esc && ch.is_alphanumeric() {
+            done = true; // starts with a number: leave as is
+        }
+        if ch == '\x1b' {
+            esc = true;
+        } else if esc && ch == 'm' {
+            esc = false;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn strip(s: &str) -> String {

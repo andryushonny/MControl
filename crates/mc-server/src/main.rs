@@ -198,13 +198,13 @@ fn main() {
         viewer_fps: arg("--viewer-fps").and_then(|v| v.parse().ok()).unwrap_or(3.0),
     };
     let ip = primary_ip();
-    println!("  {}  {}", paint(DIM, "name      "), paint(BOLD, &name));
-    println!("  {}  {}  {}", paint(DIM, "control   "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.control_port)), paint(DIM, "commands, replies, events"));
-    println!("  {}  {}  {}", paint(DIM, "data      "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.data_port)), paint(DIM, "frames"));
-    println!("  {}  {}  {}", paint(DIM, "discovery "), paint(CYAN, &format!("udp {}", mc_proto::DISCOVERY_PORT)), paint(DIM, "clients find the server by themselves"));
-    println!("  {}  {}", paint(DIM, "controller"), st.port);
-    println!("  {}  {}", paint(DIM, "laser     "), if cfg.allow_laser { paint(YELLOW, "allowed") } else { "blocked (--allow-laser to allow)".into() });
-    println!("  {}  {}", paint(DIM, "stop      "), paint(GREEN, "Ctrl+C: stage stops, laser, motors and light off"));
+    println!("  {}  {}", paint(DIM, "Name      "), paint(BOLD, &name));
+    println!("  {}  {}  {}", paint(DIM, "Control   "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.control_port)), paint(DIM, "Commands, replies, events"));
+    println!("  {}  {}  {}", paint(DIM, "Data      "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.data_port)), paint(DIM, "Frames"));
+    println!("  {}  {}  {}", paint(DIM, "Discovery "), paint(CYAN, &format!("udp {}", mc_proto::DISCOVERY_PORT)), paint(DIM, "Clients find the server by themselves"));
+    println!("  {}  {}", paint(DIM, "Controller"), st.port);
+    println!("  {}  {}", paint(DIM, "Laser     "), if cfg.allow_laser { paint(YELLOW, "Allowed") } else { "Blocked (--allow-laser to allow)".into() });
+    println!("  {}  {}", paint(DIM, "Stop      "), paint(GREEN, "Ctrl+C: stage stops, laser, motors and light off"));
     println!();
     let srv = Arc::new(net::Server {
         stage: st.clone(),

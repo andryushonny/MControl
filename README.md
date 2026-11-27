@@ -59,8 +59,8 @@ The full walk-through is in [`examples/basics.ipynb`](examples/basics.ipynb): st
 
 | Object | What |
 |---|---|
-| `Microscope(host=None, name=None)` | operator. `host=None`: tries `MCONTROL_HOST`, then the last server used, then LAN discovery |
-| `Viewer(host=None)` | read-only, previews; `fetch()` gets one full frame per second |
+| `Microscope()` / `Microscope("192.168.1.50")` | operator. Without an address: `MCONTROL_HOST`, then the last server used, then LAN discovery |
+| `Viewer()` | read-only, previews; `fetch()` gets one full frame per second |
 | `m.stage` | `position`, `goto(x,y,z)`, `move(dx,dy,dz)`, `stop()`, `zero()`, `confirm()`, `motors(on)` |
 | `m.camera` | `exposure_ms`, `gain`, `auto_exposure(on)`, `white_balance()`, `state` |
 | `m.light.level` | 0..5 |
