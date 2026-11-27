@@ -129,6 +129,12 @@ impl Server {
     /// Refuse a client before it gets a session; logged once a minute per address (scanners stay quiet).
     fn refuse(&self, w: &mut TcpStream, id: &Value, e: McError, who: String) {
         let _ = write_json(w, &err(id, &e));
+        // close politely: half-close, then drain what the client still sends. Closing with unread data makes
+        // Windows reset the connection, and the client would see "connection lost" instead of the reason.
+        let _ = w.shutdown(std::net::Shutdown::Write);
+        let _ = w.set_read_timeout(Some(Duration::from_millis(500)));
+        let mut sink = [0u8; 512];
+        while matches!(std::io::Read::read(w, &mut sink), Ok(n) if n > 0) {}
         let ip = w.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
         let mut r = self.refused.lock().unwrap();
         let t = r.entry(ip).or_insert(0);
@@ -182,6 +188,8 @@ impl Server {
     fn control_conn(self: Arc<Self>, mut c: TcpStream) {
         let addr = c.peer_addr().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
         if !self.cfg.access.allowed(&addr.ip()) {
+            let _ = c.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = read_msg_max(&mut c, &mut Vec::new(), MAX_CMD); // its hello: read, so the answer arrives
             let ip = addr.ip().to_string();
             self.refuse(&mut c, &Value::Null, McError::new("E111", ip.clone()), format!("client {ip}"));
             return;
