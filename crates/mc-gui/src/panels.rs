@@ -40,7 +40,7 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                 app.laser(laser_mw == 0);
             }
             let busy_f = app.focusing.is_some();
-            if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: > / <").clicked() {
+            if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: . and , keys (Shift: x5)").clicked() {
                 app.focus_here();
             }
             if ui.button("Follow (F)").clicked() {
@@ -583,8 +583,8 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 ui.label("um");
             });
             ui.end_row();
-            ui.label("Z step (> / <, PageUp / PageDown), um");
-            changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.z_step_um).speed(0.5).range(0.5..=200.0)).on_hover_text("Shift: 1 um, Ctrl: 20 um").changed();
+            ui.label("Z step (. and , keys / PageUp, PageDown), um");
+            changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.z_step_um).speed(0.5).range(0.5..=200.0)).on_hover_text("with Shift (> and <): five steps").changed();
             ui.end_row();
             ui.label("MStitch command");
             changed |= ui.text_edit_singleline(&mut app.proj.scan.mstitch).changed();
@@ -607,7 +607,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
         });
         ui.separator();
-        ui.label(RichText::new("Keys: arrows move the picture that way on the screen (Shift: 1/10, Ctrl: a whole field), Space stops (and switches the laser off), > / < (or PageUp / PageDown) move z, F2 light, Shift+F3 laser on / F3 off, F follows the stage, Home shows the whole sample, E/S/L tools, Esc cancels a selection. Mouse: drag pans, wheel zooms, double click moves the stage there.").weak().size(11.5));
+        ui.label(RichText::new("Keys: arrows move the picture that way on the screen (Shift: 1/10, Ctrl: a whole field), Space stops (and switches the laser off), . and , (or PageUp / PageDown) move z by the step, with Shift (> <) five steps, F2 light, Shift+F3 laser on / F3 off, F follows the stage, Home shows the whole sample, E/S/L tools, Esc cancels a selection. Mouse: drag pans, wheel zooms, double click moves the stage there.").weak().size(11.5));
     });
     app.settings_open = open;
     if changed {

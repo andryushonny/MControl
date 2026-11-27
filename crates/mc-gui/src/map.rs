@@ -217,11 +217,11 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
         app.link.send(json!({"cmd": "move", "dx": d[0], "dy": d[1]}));
         app.follow = true;
     }
-    // focus by hand: PageUp / PageDown or > / < move z (Shift: 1 um, Ctrl: 20 um, else the step in Settings)
-    // and > / < (the same keys as . and ,): Shift is part of typing them, so there only Ctrl changes the step
-    for (k, sign, typed) in [(Key::PageUp, 1.0, false), (Key::PageDown, -1.0, false), (Key::Period, 1.0, true), (Key::Comma, -1.0, true)] {
+    // focus by hand: the . / , keys (with > / < on them) or PageUp / PageDown move z by the step in Settings;
+    // with Shift held (> and < themselves) five steps
+    for (k, sign) in [(Key::PageUp, 1.0), (Key::PageDown, -1.0), (Key::Period, 1.0), (Key::Comma, -1.0)] {
         if ui.input(|i| i.key_pressed(k)) && stage.is_some() {
-            let step = if shift && !typed { 1.0 } else if ctrl { 20.0 } else { app.proj.scan.z_step_um };
+            let step = app.proj.scan.z_step_um * if shift { 5.0 } else { 1.0 };
             app.link.send(json!({"cmd": "move", "dz": sign * step}));
         }
     }

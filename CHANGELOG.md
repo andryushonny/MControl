@@ -1,14 +1,14 @@
 # Changelog
 
 ## 0.5.6
-- Z also on > / < (step in Settings, Ctrl: 20 um).
+- Z also on the . and , keys (> and < on them); the step is set in Settings, Shift makes it five times larger.
 - Settings: *swap x and y* beside the mirrors, so the map can be laid out as the stage stands in front of you (any of the 8 ways together with the mirrors); arrows and everything else follow.
 - Camera turned or mirrored against the stage: *Calibrate optics: Measure here* first finds which of the 8 orientations (4 turns, mirrored or not) the frames agree with, then measures scale and distortion; Settings → *Camera orientation*: Turn 90°, Mirror x, Mirror y by hand, and *View like the camera* (the map turned so the live picture stands upright, frame horizontal).
 - Dark frames on the preview map no longer get holes: a pure black pixel was taken for "no picture" (and showed the frames below through it); dark pixels are now dark.
 - *Clear preview* button: forgets the small pictures of where the camera has been (stitched maps stay).
 
 ## 0.5.5
-- Z by hand: PageUp / PageDown (step in Settings, 5 um by default; Shift 1 um, Ctrl 20 um); x, y, z of the stage in the status bar.
+- Z by hand: PageUp / PageDown (step in Settings, 5 um by default); x, y, z of the stage in the status bar.
 - *Focus* button: finds focus where the stage stands, as a scan does, and stays at the sharpest z (kept in surface.csv).
 
 ## 0.5.4
