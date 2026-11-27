@@ -1,0 +1,12 @@
+# Changelog
+
+## 0.2.0
+- Frame packing on PC 1: `lossless` (exact, ~2:1), `jpeg` (Bayer planes, ~5–10:1), `raw`; `auto` (default) keeps snaps exact and steps live frames down to JPEG when the link is slow: 10–20 fps on 100 Mbit.
+- Network settings: `--bind`, port fallback, `--discovery-port` / `--no-discovery`, `mc-server.conf`.
+- Access: `--allow` (local networks by default), `--operators`, `--token` (required beyond local networks), at most 5 viewers (`--max-viewers`).
+- Viewers: previews at 25 fps (up to 30); every operator command is sent to all clients as an event (started / done / failed); `Viewer().watch()`.
+- Python: `live(seconds=...)`, token remembered per server, `Frame.codec` / `Frame.exact`.
+- Error table with what to do (`mc-server errors`); log with a level column; diagrams in the README.
+
+## 0.1.0
+- First version: `mc-server.exe` (controller, camera worker, guard), Python client, simulator.

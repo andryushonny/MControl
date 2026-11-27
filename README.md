@@ -190,4 +190,4 @@ cargo build --release                 # target/release/mc-server(.exe), mc-opera
 uv run pytest                         # integration tests on the simulator
 python docs/diagrams/render.py        # the pictures in this README (node + Chrome)
 ```
-Windows binaries are built by GitHub Actions on every push and attached to each published release.
+Windows binaries are built by GitHub Actions on every push; a new version in Cargo.toml on main becomes a release with them (see CHANGELOG.md).
