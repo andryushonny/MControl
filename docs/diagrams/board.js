@@ -58,7 +58,6 @@ function board(w, h, seed = 7) {
     add(rc.ellipse(cx, cy, w, h, { fill: PAL[o.fill || "green"], fillStyle: "solid" }));
     B.text(cx, cy, s, { size: o.size || 23, bold: o.bold });
   };
-  // arrow from a to b: a straight line, or a smooth curve through `via`; the head ends exactly at b
   const path = (d, col, w, dashed) => {
     const p = document.createElementNS(NS, "path");
     p.setAttribute("d", d); p.setAttribute("fill", "none"); p.setAttribute("stroke", col);
@@ -74,19 +73,26 @@ function board(w, h, seed = 7) {
     p.setAttribute("fill", col); p.setAttribute("stroke", col); p.setAttribute("stroke-linejoin", "round");
     add(p);
   };
+  // arrow from a to b: straight, or a Z made of horizontal and vertical lines (bend "h": across, down, across;
+  // "v": down, across, down; `mid` = where the middle segment goes). The head ends exactly at b.
   B.arrow = (a, b, o = {}) => {
     const col = o.color || INK, w = o.width || 2;
-    // the line stops where the head starts, so the tip is sharp and lands on b
-    const ctrl = o.via ? [2 * o.via[0] - (a[0] + b[0]) / 2, 2 * o.via[1] - (a[1] + b[1]) / 2] : null;
-    const dirEnd = ctrl || a, dirStart = ctrl || b;
+    let pts = [a, b];
+    if (Math.abs(a[0] - b[0]) > 1 && Math.abs(a[1] - b[1]) > 1) {
+      const bend = o.bend || (Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]) ? "h" : "v");
+      if (bend === "h") { const m = o.mid ?? (a[0] + b[0]) / 2; pts = [a, [m, a[1]], [m, b[1]], b]; }
+      else { const m = o.mid ?? (a[1] + b[1]) / 2; pts = [a, [a[0], m], [b[0], m], b]; }
+    }
     const back = (p, q, d) => { const L = Math.hypot(p[0] - q[0], p[1] - q[1]) || 1; return [p[0] + (q[0] - p[0]) * d / L, p[1] + (q[1] - p[1]) * d / L]; };
-    const e = back(b, dirEnd, 10), s0 = o.both ? back(a, dirStart, 10) : a;
-    path(ctrl ? `M ${s0[0]} ${s0[1]} Q ${ctrl[0]} ${ctrl[1]} ${e[0]} ${e[1]}` : `M ${s0[0]} ${s0[1]} L ${e[0]} ${e[1]}`, col, w, o.dashed);
-    head(b, dirEnd, col);
-    if (o.both) head(a, dirStart, col);
+    const n = pts.length, line = pts.slice();
+    line[n - 1] = back(b, pts[n - 2], 10);                 // the line stops where the head starts
+    if (o.both) line[0] = back(a, pts[1], 10);
+    path("M " + line.map(p => p.join(" ")).join(" L "), col, w, o.dashed);
+    head(b, pts[n - 2], col);
+    if (o.both) head(a, pts[1], col);
     if (o.label) {
-      const m = o.via || [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      B.text(m[0] + (o.dx || 0), m[1] + (o.dy ?? -16), o.label, { size: o.size || 21, color: o.labelColor || col, anchor: o.anchor });
+      const m = o.at || (n === 2 ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : [(pts[1][0] + pts[2][0]) / 2, (pts[1][1] + pts[2][1]) / 2]);
+      B.text(m[0] + (o.dx || 0), m[1] + (o.dy ?? (o.at ? 0 : -16)), o.label, { size: o.size || 21, color: o.labelColor || col, anchor: o.anchor });
     }
   };
   B.title = (x, y, s, sub) => {

@@ -27,7 +27,7 @@ D.architecture = () => {
     "JPEG previews, 3 fps\nevery operator action as an event\nread-only", { fill: "yellow", strong: true, size: 30 });
   B.arrow([760, 220], [920, 220], { both: true, label: "control :5160", dy: -18 });
   B.arrow([760, 300], [920, 300], { label: "frames :5161", dy: -18 });
-  B.arrow([760, 340], [920, 690], { via: [850, 560], both: true });
+  B.arrow([760, 340], [920, 690], { both: true, bend: "h", mid: 840 });
   B.text(905, 480, "previews + all events", { size: 22, anchor: "start" });
 };
 
@@ -39,8 +39,8 @@ D.snap = () => {
     B.text(40, y, n, { size: 26, bold: true, anchor: "start" });
     B.line([230, y], [1460, y], { color: "#bbbbbb", dashed: true });
   }
-  B.arrow([250, 180], [300, 300], { label: "snap x=300 settle_ms=30", anchor: "start", dx: 20, dy: -40 });
-  B.arrow([320, 300], [370, 420], { label: "move in 1 mm steps", anchor: "start", dx: 18, dy: -6 });
+  B.arrow([270, 180], [270, 300], { label: "snap x=300 settle_ms=30", anchor: "start", at: [288, 240] });
+  B.arrow([390, 300], [390, 400], { label: "move in 1 mm steps", anchor: "start", at: [408, 350] });
   B.rect(370, 400, 450, 40, { fill: "orange" }); B.text(595, 420, "moving", { size: 24 });
   B.rect(820, 400, 110, 40, { fill: "yellow" }); B.text(875, 420, "settle", { size: 22 });
   for (const [x, l] of [[820, "stopped"], [930, "t_ready"]]) {
@@ -53,8 +53,8 @@ D.snap = () => {
     if (x < 930) B.cross(x + 32, 545, 10);
   }
   B.text(560, 500, "frames during the move or the settle: never used", { size: 21, color: "#c0392b" });
-  B.arrow([1002, 525], [1070, 300], { label: "frame 108\n+ xyz at mid-exposure", anchor: "start", dx: 8, dy: 30, color: "#2f7d32" });
-  B.arrow([1090, 300], [1150, 180], { label: "reply {seq: 108}\npixels on the data link", anchor: "start", dx: 14, dy: 10 });
+  B.arrow([1002, 525], [1002, 300], { label: "frame 108\n+ xyz at mid-exposure", anchor: "start", at: [1020, 460], color: "#2f7d32" });
+  B.arrow([1060, 300], [1060, 180], { label: "reply {seq: 108}\npixels on the data link", anchor: "start", at: [1078, 240] });
   B.box(230, 670, 1230, 90, "Every frame carries",
     "xyz_um (stage at mid-exposure) · moving · settled_ms · t_exp_start / t_exp_end (server clock) → t_local_ns on PC 2", { fill: "blue", size: 25, bodySize: 22 });
 };
@@ -130,7 +130,7 @@ D.events = () => {
   lines.forEach((l, i) => B.text(1080, 200 + i * 36, l, { size: 21, anchor: "start", color: l.includes("FAILED") ? "#c0392b" : "#2b2b2b" }));
   const w = B.box(1060, 480, 400, 140, "PC 4 · v.on_event(fn)", "your code reacts:\nlog, alarm, dashboard", { fill: "yellow", size: 28 });
   B.arrow([920, 280], [1060, 280], { label: "events" });
-  B.arrow([920, 380], [1060, 540], { via: [1000, 470] });
+  B.arrow([920, 380], [1060, 550], { bend: "h", mid: 990 });
   B.box(40, 660, 1420, 70, "Events:  command (started / done / failed) · client (connected, disconnected) · operator · safe · error · telemetry (1 Hz)",
     "", { fill: "grey", size: 24, bold: false });
 };
@@ -144,7 +144,7 @@ D.frames = () => {
   B.arrow(c.r, r.l, { label: "frames" });
   const o = B.box(760, 130, 340, 130, "operator outbox", "RAW, newest wins\n+ snaps: never dropped", { fill: "green", size: 27 });
   const v = B.box(760, 400, 340, 130, "viewer outboxes", "JPEG preview, 3 fps\nencoded once, shared by all", { fill: "yellow", size: 27 });
-  B.arrow([640, 300], [760, 195]); B.arrow([640, 370], [760, 465]);
+  B.arrow([640, 300], [760, 195], { bend: "h", mid: 700 }); B.arrow([640, 370], [760, 465], { bend: "h", mid: 700 });
   const p2 = B.box(1220, 140, 240, 110, "PC 2", "≈ 5 MB / frame", { fill: "green", size: 30 });
   const p3 = B.box(1220, 410, 240, 110, "PC 3…N", "≈ 5 kB / frame", { fill: "yellow", size: 30 });
   B.arrow(o.r, p2.l, { label: "thread" }); B.arrow(v.r, p3.l, { label: "thread each" });
