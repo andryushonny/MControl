@@ -1,0 +1,21 @@
+[package]
+name = "mc-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MControl clients: mc-operator (control + full frames) and mc-viewer (read-only)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mc-operator"
+path = "src/bin/mc-operator.rs"
+
+[[bin]]
+name = "mc-viewer"
+path = "src/bin/mc-viewer.rs"
+
+[dependencies]
+mc-proto = { path = "../mc-proto" }
+serde_json.workspace = true

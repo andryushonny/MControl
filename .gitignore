@@ -1,0 +1,13 @@
+/target
+**/__pycache__/
+*.egg-info/
+/dist
+/build
+.claude/
+*.log
+mc-server-state.json
+/frames
+/tmp
+.ipynb_checkpoints/
+.pytest_cache/
+snap.*
