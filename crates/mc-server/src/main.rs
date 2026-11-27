@@ -298,7 +298,8 @@ fn main() {
         max_viewers: arg("--max-viewers").and_then(|v| v.parse().ok()).unwrap_or(5),
         access,
     };
-    let ip = if bind.is_unspecified() { primary_ip() } else { bind.to_string() };
+    let addrs = lan_addrs();
+    let ip = if bind.is_unspecified() { primary_ip(&addrs) } else { bind.to_string() };
     // the web page (--web-port N, default 8080; --no-web)
     let web_l = if has("--no-web") { None } else { web::listen(bind, arg("--web-port").and_then(|v| v.parse().ok()).unwrap_or(8080)) };
     let web_port = web_l.as_ref().map(|(_, p)| *p);
@@ -306,6 +307,16 @@ fn main() {
     let row = |k: &str, v: String, note: &str| println!("  {}  {}  {}", paint(DIM, &format!("{k:<10}")), v, paint(DIM, note));
     let a = &ncfg.access;
     row("Name", paint(BOLD, &name), "");
+    if bind.is_unspecified() {
+        // every address of this PC: the clients give one of these (on its network)
+        if addrs.is_empty() {
+            row("Addresses", paint(YELLOW, "none"), "No network: only this PC can connect (127.0.0.1)");
+        }
+        for (i, (nic, a)) in addrs.iter().enumerate() {
+            let note = if a.is_link_local() { format!("{nic}; self-assigned (no DHCP there): changes, a fixed address is better") } else { nic.clone() };
+            row(if i == 0 { "Addresses" } else { "" }, paint(CYAN, &a.to_string()), &note);
+        }
+    }
     row("Control", paint(CYAN, &format!("tcp://{ip}:{control_port}")), "Commands, replies, events");
     row("Data", paint(CYAN, &format!("tcp://{ip}:{data_port}")), "Frames");
     match discovery_port {
@@ -393,15 +404,33 @@ fn free_udp_port() -> u16 {
     UdpSocket::bind("127.0.0.1:0").and_then(|s| s.local_addr()).map(|a| a.port()).unwrap_or(5158)
 }
 
-/// The address other PCs reach this one at (no packet is sent).
-fn primary_ip() -> String {
+/// This PC's IPv4 addresses on its networks (not loopback), with the adapter's name; usual networks first.
+fn lan_addrs() -> Vec<(String, std::net::Ipv4Addr)> {
+    let mut v: Vec<(String, std::net::Ipv4Addr)> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|i| match i.ip() {
+            std::net::IpAddr::V4(a) if !a.is_loopback() && !a.is_unspecified() => Some((i.name.clone(), a)),
+            _ => None,
+        })
+        .collect();
+    v.sort_by_key(|(_, a)| a.is_link_local());
+    v.dedup_by_key(|(_, a)| *a);
+    v
+}
+
+/// The address other PCs reach this one at (no packet is sent); without a route out, the first of this PC's addresses.
+fn primary_ip(addrs: &[(String, std::net::Ipv4Addr)]) -> String {
     UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| {
             s.connect("10.255.255.255:1")?;
             s.local_addr()
         })
+        .ok()
         .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "127.0.0.1".into())
+        .filter(|a| a != "0.0.0.0")
+        .or_else(|| addrs.first().map(|(_, a)| a.to_string()))
+        .unwrap_or_else(|| "127.0.0.1".into())
 }
 
 fn hostname() -> String {

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.4
+- mc-server's banner lists every address of the PC with its adapter (*Addresses*); a self-assigned one (169.254.x.x, no DHCP on that network) is marked. Without a route out (no gateway) Control / Data / Web show one of these instead of 127.0.0.1.
+
 ## 0.6.3
 - *Keys* window (top bar): every action and its key in one table — stage arrows, Z (two pairs, Shift x5), Stop, light, laser on / off, focus here, snap, follow, fit, the tools, cancel / done. *Change*, then press the key (with Shift / Ctrl if wanted); *None* takes the key away, *Default* gives back the original, *All back to the defaults*. A key used by two actions is red. Kept for next time; the button names show the current keys.
 
