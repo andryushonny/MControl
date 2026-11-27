@@ -428,7 +428,7 @@ fn primary_ip(addrs: &[(String, std::net::Ipv4Addr)]) -> String {
         })
         .ok()
         .map(|a| a.ip().to_string())
-        .filter(|a| a != "0.0.0.0")
+        .filter(|a| a != "0.0.0.0" && (addrs.is_empty() || addrs.iter().any(|(_, x)| x.to_string() == *a)))
         .or_else(|| addrs.first().map(|(_, a)| a.to_string()))
         .unwrap_or_else(|| "127.0.0.1".into())
 }

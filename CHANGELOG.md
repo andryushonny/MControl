@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.5
+- mc-server's banner: Control / Data / Web show an address the PC really has now (one of *Addresses*), not a stale one of a network it has left.
+
 ## 0.6.4
 - mc-server's banner lists every address of the PC with its adapter (*Addresses*); a self-assigned one (169.254.x.x, no DHCP on that network) is marked. Without a route out (no gateway) Control / Data / Web show one of these instead of 127.0.0.1.
 
