@@ -218,21 +218,25 @@ fn sim_frame(s: &mut Sim) -> Raw {
     let mut rng: u64 = 0x9E37_79B9_7F4A_7C15 ^ s.seq;
     let r0 = ((w * w + h * h) as f64).sqrt() / 2.0;
     let (tc, ts) = (s.tilt.cos(), s.tilt.sin());
+    let plain = s.k1 == 0.0 && s.tilt == 0.0; // the usual simulator: no lens, sample square on the stage
     for j in 0..h {
+        let row_y = cy + (j as f64 + 0.5 - h as f64 / 2.0) * s.px_um;
         for i in 0..w {
-            // the sensor pixel's offset from the centre (the stage position is the frame's centre); through the
-            // lens it shows the ideal offset q with p = q (1 + k1 |q|^2 / r0^2)
-            let p = (i as f64 + 0.5 - w as f64 / 2.0, j as f64 + 0.5 - h as f64 / 2.0);
-            let mut q = p;
-            if s.k1 != 0.0 {
+            let (wx, wy) = if plain {
+                (cx + (i as f64 + 0.5 - w as f64 / 2.0) * s.px_um, row_y)
+            } else {
+                // the sensor pixel's offset from the centre (the stage position is the frame's centre); through
+                // the lens it shows the ideal offset q with p = q (1 + k1 |q|^2 / r0^2)
+                let p = (i as f64 + 0.5 - w as f64 / 2.0, j as f64 + 0.5 - h as f64 / 2.0);
+                let mut q = p;
                 for _ in 0..8 {
                     let f = 1.0 + s.k1 * (q.0 * q.0 + q.1 * q.1) / (r0 * r0);
                     q = (p.0 / f, p.1 / f);
                 }
-            }
-            let (gx, gy) = (cx + q.0 * s.px_um, cy + q.1 * s.px_um);
-            // the sample's own axes, turned against the stage's
-            let (wx, wy) = (tc * gx + ts * gy, -ts * gx + tc * gy);
+                let (gx, gy) = (cx + q.0 * s.px_um, cy + q.1 * s.px_um);
+                // the sample's own axes, turned against the stage's
+                (tc * gx + ts * gy, -ts * gx + tc * gy)
+            };
             let (fx, fy) = (wx.rem_euclid(100.0), wy.rem_euclid(100.0));
             let mut v = 200.0;
             let near = |f: f64| f < 1.0 || f > 99.0;

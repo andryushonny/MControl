@@ -14,7 +14,7 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
 
 ## Quick start
 
-**PC 1: the microscope PC (Windows 10)**
+**PC 1: the microscope PC**
 1. Install the MindVision SDK (`MindVision Platform Setup`, <https://www.mindvision.com.cn>).
 2. Close the Optosky software: it holds the COM port and the camera.
 3. Download `mc-server.exe` from [Releases](../../releases) and run it:
@@ -61,7 +61,9 @@ How a session goes:
 3. **Scan.** *Quick scan* / *Quality scan* put it in the **queue**: one scan on the microscope at a time, the previous one stitching beside it (MStitch, quick or quality mode), each map shown as soon as it is stitched. The queue is grouped by objective: the scans for the objective on the microscope go first, then it stops once and asks for the next objective (*20x is on: continue*). Limits, with the overlap: **quick ≤ 1200 frames, quality ≤ 225**.
 4. **Lattice** (L): click 2–3 crosses on a stitched map; each is found to a tenth of a pixel and gets its (X, Y), editable. 2 crosses: square lattice; 3 and more: fitted, with the residual. The red lattice is drawn over everything, with the numbers in the top left corner of each square, once 2 crosses are marked. **Level grid** turns the view (all selections together) so the lattice stands level; the camera does not turn, so selections stay rectangles of the stage and the squares at their edges come out partial.
 5. **Align maps to the lattice**: each map is stitched on its own and placed by the stage, a few µm off; Align finds every lattice cross on it and moves it onto the lattice (shift, or shift, turn and scale), so neighbouring selections meet pixel to pixel.
-6. **Cut and export DXF**: every selection with *cut* ticked is cut along the lattice into squares (PNG, transparent where the selection or its map ends), all on the same lattice: a layer cake of squares, one layer per selection in the order of the list, plus the lattice and its numbers. `drawing.dxf` (AutoCAD 2010, µm) references the squares next to it.
+6. **Cut and export DXF**: every selection with a stitched map is cut along the lattice into squares (PNG, transparent where the selection or its map ends), all on the same lattice: a layer cake of squares, one layer per selection in the order of the list, plus the lattice and its numbers. `drawing.dxf` (AutoCAD 2010, µm) references the squares next to it.
+
+**Focus while scanning.** Every frame gets a sharpness (variance of the Laplacian over the squared brightness). A frame much less sharp than the last sharp ones is looked for in z: ±5 µm, then ±10, ±20, ±50 and only then ±100; once one is sharper the stage goes on that way and the step is halved down to 2.5 µm; if nothing is sharper (a plain spot) the frame stays where it was. Every frame's x, y, z and sharpness are kept: `focus.csv` by each scan and `surface.csv` for the project, the surface of the sample; the next frame starts from the plane through the points so far. Settings: on/off, how blurred is blurred, how far it may go.
 
 Status bar: the link, the objective, the scan running with frames done and time left, the stitching, the queue and when everything will be done. *Stop* (Space) stops the stage and the scan and pauses the queue.
 

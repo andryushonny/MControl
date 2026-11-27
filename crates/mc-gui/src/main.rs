@@ -7,6 +7,7 @@ mod calib;
 mod cross;
 mod drawing;
 mod export;
+mod focus;
 mod geom;
 mod link;
 mod map;
@@ -353,6 +354,8 @@ impl App {
             step_um: self.proj.step_um,
             mstitch: self.proj.scan.mstitch.clone(),
             wb: self.proj.wb,
+            focus: focus::Settings { on: self.proj.scan.autofocus, drop: self.proj.scan.focus_drop, max_um: self.proj.scan.focus_max_um, settle_ms: 0.0 },
+            surface: Some(self.proj.path("surface.csv")),
         };
         let job = scan::start(self.link.clone(), id, mode, sel.rect, s, self.proj.path(&format!("{base}/frames")), self.proj.path(&format!("{base}/map")));
         self.jobs.push(job);
@@ -462,7 +465,8 @@ impl App {
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];
-        for s in sample.selections.iter().filter(|s| s.cut) {
+        // every selection with a map: one layer each, all on the same lattice
+        for s in sample.selections.iter() {
             match self.map_of(s) {
                 Some((p, a)) => items.push((s.name.clone(), s.color, s.rect, p.pyr.clone(), a)),
                 None => skipped.push(s.name.clone()),
@@ -472,7 +476,7 @@ impl App {
             self.message = format!("not cut (no stitched map loaded): {}", skipped.join(", "));
         }
         if items.is_empty() {
-            self.message = "nothing to cut: tick \"cut\" on selections that have a stitched map".into();
+            self.message = "nothing to cut: no selection has a stitched map yet".into();
             return;
         }
         let out = self.proj.path(&format!("export/{}_{}", export::layer_name(&sample.name), now_text().replace([':', ' '], "-")));

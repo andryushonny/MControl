@@ -5,7 +5,7 @@ D.architecture = () => {
   const B = board(1500, 900, 3);
   B.title(40, 50, "Who runs what", "One exe on PC 1, Python on the other PCs");
   B.text(1460, 58, "UDP 5159: clients find PC 1 by themselves", { size: 22, color: "#6b6b6b", anchor: "end" });
-  B.frame(40, 110, 760, 750, "PC 1 · microscope PC (Windows 10)");
+  B.frame(40, 110, 760, 750, "PC 1 · microscope PC");
   const srv = B.box(80, 165, 680, 190, "mc-server.exe",
     "network · operator lease · ring of the last 20 frames\nwatchdog: operator silent 3 s → stage stops, laser off\ncoloured log of everything", { fill: "blue", strong: true, size: 30 });
   const wk = B.box(80, 430, 320, 160, "camera worker", "own process\nMindVision SDK\nraw Bayer, no conversion", { fill: "purple" });

@@ -40,7 +40,8 @@ pub struct Selection {
     pub rect: Rect,
     pub color: [u8; 3],
     pub visible: bool,
-    /// cut this one into squares on export
+    /// (old projects; every selection with a map is cut now)
+    #[serde(default)]
     pub cut: bool,
     pub scans: Vec<Scan>,
     /// Align's correction of the map: stage as the map says -> stage as the sample's lattice says
@@ -114,11 +115,30 @@ pub struct ScanSettings {
     pub back_um: f64,
     /// MStitch command line (until its C API is linked in)
     pub mstitch: String,
+    /// look for focus when a frame is blurred (see focus.rs)
+    #[serde(default = "yes")]
+    pub autofocus: bool,
+    /// blurred: less sharp than this part of the last sharp frames
+    #[serde(default = "focus_drop")]
+    pub focus_drop: f64,
+    /// how far up and down it may look, um
+    #[serde(default = "focus_max")]
+    pub focus_max_um: f64,
+}
+
+fn yes() -> bool {
+    true
+}
+fn focus_drop() -> f64 {
+    0.5
+}
+fn focus_max() -> f64 {
+    100.0
 }
 
 impl Default for ScanSettings {
     fn default() -> Self {
-        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into() }
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_drop: 0.5, focus_max_um: 100.0 }
     }
 }
 

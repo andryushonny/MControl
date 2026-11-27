@@ -5,8 +5,11 @@
 - Limits per selection, with the overlap: quick ≤ 1200 frames, quality ≤ 225.
 - Lattice of crosses from 2–3 marked crosses (sub-pixel), numbers in the top left of each square, *Level grid* for a sample turned on the stage, *Align* of every map onto the lattice, cutting all selections along one lattice into squares, DXF for AutoCAD (layers in list order, µm).
 - Optics per objective calibrated with the stage: scale, camera turn, lens distortion (frames corrected before stitching); white balance.
+- Autofocus while scanning: sharpness of every frame; a blurred one is looked for at ±5, ±10, ±20, ±50, ±100 µm, then refined to 2.5 µm; x, y, z and sharpness of every frame kept (`focus.csv`, `surface.csv`), the next frame starts from the surface so far.
+- Export takes every selection with a stitched map (no separate checkbox).
 - The command line tool is `mc-cli.exe`.
 - Simulator: the camera starts where the stage is; `--sim-k1` (lens distortion) and `--sim-tilt` (sample turned) for tests.
+- Tests: a server is waited for until it is gone before the next one starts (stable on slow machines).
 
 ## 0.4.0
 - Scripts read as plain Python: `m.goto()`, `m.move()`, `m.sleep()`, `m.snap()` straight on the microscope, one per line.

@@ -130,7 +130,7 @@ def test_reconnect_repeats_only_idempotent(server):
         assert m.stage.position is not None                # link is up again
         m.close()
     finally:
-        p.kill()
+        stop(p)                                            # gone, ports free, before the next test starts one
 
 
 def test_guard_makes_it_safe():
@@ -143,6 +143,7 @@ def test_guard_makes_it_safe():
     os.kill(p.pid, 19)                                     # SIGSTOP: server hangs, guard must act
     time.sleep(4.5)
     os.kill(p.pid, 9)
+    p.wait()
     out = open(p.logfile, errors="replace").read()
     assert "Safe state set" in out
 

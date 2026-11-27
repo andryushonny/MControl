@@ -167,8 +167,7 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                             changed = true;
                         }
                         changed |= ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(110.0)).changed();
-                        changed |= ui.checkbox(&mut s.visible, "").on_hover_text("visible").changed();
-                        changed |= ui.checkbox(&mut s.cut, "cut").on_hover_text("cut into squares on export").changed();
+                        changed |= ui.checkbox(&mut s.visible, "").on_hover_text("shown on the map (export takes every selection with a map)").changed();
                     });
                     let c = s.rect.center();
                     let z = s.rect.size();
@@ -451,6 +450,16 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
             ui.label("Backlash approach, um");
             changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.back_um).range(0.0..=500.0)).changed();
+            ui.end_row();
+            ui.label("Autofocus while scanning");
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut app.proj.scan.autofocus, "").changed();
+                ui.label("blurred below");
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_drop).speed(0.01).range(0.3..=0.95)).changed();
+                ui.label("of the last sharp; look up to +-");
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_max_um).speed(1.0).range(5.0..=100.0)).changed();
+                ui.label("um");
+            });
             ui.end_row();
             ui.label("MStitch command");
             changed |= ui.text_edit_singleline(&mut app.proj.scan.mstitch).changed();
