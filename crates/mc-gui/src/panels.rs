@@ -200,7 +200,7 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                             changed = true;
                         }
                         changed |= ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(110.0)).changed();
-                        changed |= ui.checkbox(&mut s.visible, "").on_hover_text("shown on the map (export takes every selection with a map)").changed();
+                        changed |= ui.checkbox(&mut s.visible, "").on_hover_text("shown on the map and exported (cut into squares)").changed();
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Opacity").size(11.0));

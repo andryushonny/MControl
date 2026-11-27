@@ -624,8 +624,8 @@ impl App {
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];
-        // every selection with a map: one layer each, all on the same lattice
-        for s in sample.selections.iter() {
+        // every ticked selection with a map: one layer each, all on the same lattice
+        for s in sample.selections.iter().filter(|s| s.visible) {
             match self.map_of(s) {
                 Some((p, a)) => items.push((s.name.clone(), s.color, s.rect, p.pyr.clone(), a, s.opacity)),
                 None => skipped.push(s.name.clone()),
@@ -635,7 +635,7 @@ impl App {
             self.message = format!("not cut (no stitched map loaded): {}", skipped.join(", "));
         }
         if items.is_empty() {
-            self.message = "nothing to cut: no selection has a stitched map yet".into();
+            self.message = "nothing to cut: no ticked selection has a stitched map yet".into();
             return;
         }
         let out = self.proj.path(&format!("export/{}_{}", export::layer_name(&sample.name), now_text().replace([':', ' '], "-")));

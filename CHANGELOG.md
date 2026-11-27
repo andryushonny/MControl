@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.5.8
+- Export takes the ticked selections (with a stitched map) only; the tick shows a selection on the map and sends it to export.
 - *Move map* on a selection: the arrows move its map by hand (1 map pixel, Shift 10), not the stage; Enter or Esc: done. To bring neighbouring selections together before Align.
 - Align continues from where a map stands now (a shift by hand included) instead of from the stitched placement.
 - Opacity per selection (slider on its card): on the map and in the exported squares (PNG alpha, shown by AutoCAD); saved in the project.
