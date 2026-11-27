@@ -210,6 +210,7 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                 let nh = app.frames_for(&sel_now, Mode::Quality);
                 let objectives: Vec<String> = app.proj.objectives.iter().map(|o| o.objective.clone()).collect();
                 let nudging = app.nudging;
+                let is_base = app.proj.sample().lattice_sel == Some(sid);
                 let focused = app.focus == Some(app.proj.sample().selections[k].id);
                 let mut changed = false;
                 let frame = egui::Frame::group(ui.style()).fill(if focused { Color32::from_gray(48) } else { Color32::TRANSPARENT });
@@ -223,6 +224,10 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                         }
                         changed |= ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(110.0)).changed();
                         changed |= ui.checkbox(&mut s.visible, "").on_hover_text("shown on the map and exported (cut into squares)").changed();
+                        if is_base {
+                            ui.label(RichText::new("base").color(Color32::from_rgb(240, 90, 70)).size(11.0))
+                                .on_hover_text("the lattice was marked on this map: it moves with it (Move map), the other maps are aligned onto it");
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Opacity").size(11.0));
@@ -288,6 +293,12 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                         if ui.selectable_label(moving, "Move map").on_hover_text("the arrows move this map (1 px, Shift 10 px), not the stage; Enter: done").clicked() {
                             action = Some((k, "nudge"));
                         }
+                        if !busy && s.scans.iter().any(|sc| !sc.frames.is_empty()) && ui.small_button("Stitch again").on_hover_text("the last scan's frames stitched once more (a newer MStitch, other settings), no scanning").clicked() {
+                            action = Some((k, "restitch"));
+                        }
+                        if !is_base && ui.small_button("Make base").on_hover_text("the lattice belongs to this map: it moves with it, the others are aligned onto it").clicked() {
+                            action = Some((k, "base"));
+                        }
                         if ui.small_button("Delete").clicked() {
                             action = Some((k, "delete"));
                         }
@@ -315,6 +326,11 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                     if app.nudging.is_some() {
                         app.message = format!("moving the map of {}: arrows (Shift: x10), Enter: done", app.proj.sample().selections[k].name);
                     }
+                }
+                "restitch" => app.restitch(id),
+                "base" => {
+                    app.proj.sample_mut().lattice_sel = Some(id);
+                    app.message = format!("{} is the base now: the lattice moves with its map, Align brings the others onto it", app.proj.sample().selections[k].name);
                 }
                 "show" => {
                     app.center = rect.center();
@@ -663,6 +679,12 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_max_um).speed(1.0).range(5.0..=100.0)).changed();
                     ui.label("um");
                 });
+            });
+            ui.end_row();
+            ui.label("Autofocus window, +- um");
+            ui.horizontal(|ui| {
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_window_um).speed(1.0).range(0.0..=2000.0)).changed();
+                ui.label(RichText::new("z never leaves this around where the scan started (or where Focus was pressed); 0: no limit").weak().size(11.0));
             });
             ui.end_row();
             ui.label("Z step (. and , keys / PageUp, PageDown), um");

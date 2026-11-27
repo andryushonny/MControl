@@ -43,6 +43,8 @@ pub struct Settings {
     /// how far from where the frame started it may look, um
     pub max_um: f64,
     pub settle_ms: f64,
+    /// z never leaves +- this from where it started (the scan's start, or here for the focus button); 0: no limit
+    pub window_um: f64,
 }
 
 pub struct Shot {
@@ -65,6 +67,8 @@ pub struct Focus {
     csv: Option<std::fs::File>,
     surface: Option<std::fs::File>,
     tag: String,
+    /// the z the window is around (set by the caller: where it started)
+    pub center: Option<f64>,
 }
 
 impl Focus {
@@ -82,12 +86,32 @@ impl Focus {
             }
             Some(f)
         });
-        Focus { s, recent: VecDeque::new(), points: vec![], since_plain: 99, csv, surface, tag: tag.into() }
+        Focus { s, recent: VecDeque::new(), points: vec![], since_plain: 99, csv, surface, tag: tag.into(), center: None }
     }
 
     /// Where z should be at (x, y): the plane through the points so far (3 or more, spread out), else the
     /// nearest point, else `z0`.
+    /// Within the window around where it started?
+    fn ok(&self, z: f64) -> bool {
+        match self.center {
+            Some(c) if self.s.window_um > 0.0 => (z - c).abs() <= self.s.window_um + 1e-9,
+            _ => true,
+        }
+    }
+
+    /// z brought into the window.
+    pub fn clamp(&self, z: f64) -> f64 {
+        match self.center {
+            Some(c) if self.s.window_um > 0.0 => z.clamp(c - self.s.window_um, c + self.s.window_um),
+            _ => z,
+        }
+    }
+
     pub fn predict(&self, x: f64, y: f64, z0: f64) -> f64 {
+        self.clamp(self.predict_free(x, y, z0))
+    }
+
+    fn predict_free(&self, x: f64, y: f64, z0: f64) -> f64 {
         // autofocus off: z stays where it was when the scan began
         if !self.s.on {
             return z0;
@@ -126,6 +150,7 @@ impl Focus {
 
     /// A frame at (x, y), in focus if focus can be found. `stop`: checked between probes.
     pub fn shot(&mut self, link: &Link, x: f64, y: f64, z_guess: f64, stop: &dyn Fn() -> bool) -> Result<Shot, String> {
+        let z_guess = self.clamp(z_guess);
         let (f0, s0, sh0) = self.take(link, x, y, z_guess)?;
         let reference = {
             let mut r: Vec<f64> = self.recent.iter().copied().collect();
@@ -150,6 +175,9 @@ impl Focus {
                     if stop() {
                         return Err("stopped".into());
                     }
+                    if !self.ok(z) {
+                        continue;
+                    }
                     let (f, s, sh) = self.take(link, x, y, z)?;
                     probes += 1;
                     if sh > best.1 {
@@ -167,7 +195,7 @@ impl Focus {
                     let dir = (best.0 - z_guess).signum();
                     for _ in 0..8 {
                         let z = best.0 + dir * d;
-                        if (z - z_guess).abs() > self.s.max_um || stop() {
+                        if (z - z_guess).abs() > self.s.max_um || !self.ok(z) || stop() {
                             break;
                         }
                         let (f, s, sh) = self.take(link, x, y, z)?;
@@ -182,6 +210,9 @@ impl Focus {
                     while step >= 2.5 && !stop() {
                         let zc = best.0;
                         for z in [zc + step, zc - step] {
+                            if !self.ok(z) {
+                                continue;
+                            }
                             let (f, s, sh) = self.take(link, x, y, z)?;
                             probes += 1;
                             if sh > best.1 {
@@ -252,7 +283,7 @@ mod tests {
 
     #[test]
     fn surface_plane() {
-        let mut f = Focus { s: Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0 }, recent: VecDeque::new(), points: vec![], since_plain: 99, csv: None, surface: None, tag: String::new() };
+        let mut f = Focus { s: Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, recent: VecDeque::new(), points: vec![], since_plain: 99, csv: None, surface: None, tag: String::new(), center: None };
         for (x, y) in [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0)] {
             f.points.push([x, y, 5.0 + 0.02 * x - 0.01 * y, 1.0]);
         }

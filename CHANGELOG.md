@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.13
+- The base selection: the one the lattice's crosses were marked on (shown *base*; *Make base* to choose another). The lattice moves with its map (*Move map*: arrows 1 map px, Shift 10), and *Align* brings every other map onto the base map cross to cross: each lattice cross in both selections found on both maps, this map moved so its crosses lie on the base's (shift and turn; scale too only for another objective). Without a base map in common, onto the lattice as before, now also without scale. A map is no longer stretched to a lattice marked by hand.
+- Crosses marked on a map that was moved (by hand or Align) are found where the map is drawn now (before: where it was stitched).
+- *Stitch again* in a selection: the last scan's frames stitched once more (a newer MStitch: objects whole, transparent edges), nothing scanned.
+- Settings, *Autofocus window*: z never leaves +- this around where the scan started (or where Focus was pressed); 0 = no limit. Default 50 um.
+- The black strips at maps' edges come from MStitch < 0.5.1 (black where no frame reaches); 0.5.1 saves those transparent: update MStitch and *Stitch again*.
+
 ## 0.6.12
 - Settings, *Autofocus while scanning*: on / off, shown plainly; off means every frame at the z the scan began at (before, z still followed the surface measured earlier). The focus button stays for focusing by hand.
 

@@ -140,12 +140,47 @@ pub fn start(link: Arc<Link>, selection: u32, mode: Mode, rect: Rect, s: Setting
     job
 }
 
+/// Stitch frames scanned before into `map_dir` (nothing scanned). Runs on its own thread.
+pub fn restitch(selection: u32, mode: Mode, s: Settings, frames_dir: PathBuf, map_dir: PathBuf) -> Arc<Mutex<Job>> {
+    let n = std::fs::read_dir(&frames_dir).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".json") && e.file_name().to_string_lossy().starts_with('r')).count()).unwrap_or(0);
+    let job = Arc::new(Mutex::new(Job {
+        selection,
+        mode,
+        total: n,
+        done: n,
+        phase: Phase::Stitching,
+        started: Instant::now(),
+        frames_dir: frames_dir.clone(),
+        map_dir: map_dir.clone(),
+        thumbs: vec![],
+        stop: false,
+        log: vec![],
+        warning: None,
+        scan_s: Some(0.0),
+        stitch_at: Some(Instant::now()),
+    }));
+    let j2 = job.clone();
+    std::thread::Builder::new()
+        .name("stitch".into())
+        .spawn(move || {
+            let r = stitch(&s, mode, &frames_dir, &map_dir, &j2);
+            let mut j = j2.lock().unwrap();
+            j.phase = match r {
+                Ok(()) => Phase::Done,
+                Err(e) => Phase::Failed(e),
+            };
+        })
+        .unwrap();
+    job
+}
+
 fn run(link: &Link, job: &Mutex<Job>, rows: &[Vec<P2>], s: &Settings, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let scan_dir = dir.parent().unwrap_or(dir);
     let tag = scan_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut focus = crate::focus::Focus::new(crate::focus::Settings { settle_ms: s.settle_ms, ..s.focus.clone() }, scan_dir, s.surface.clone(), &tag);
     let z_start = link.stage_pos().map(|p| p[2]).unwrap_or(0.0);
+    focus.center = Some(z_start);
     for (j, row) in rows.iter().enumerate() {
         // a row is one block: nothing from another client gets between its frames
         link.call(json!({"cmd": "begin"}))?;
@@ -207,18 +242,20 @@ fn stitch(s: &Settings, mode: Mode, frames: &Path, map: &Path, job: &Mutex<Job>)
         Some(p) => serde_json::from_slice(&std::fs::read(p).map_err(|e| format!("{p}: {e}"))?).map_err(|e| format!("{p}: {e}"))?,
         None => s.optics.profile_json(),
     };
-    // corrected by the flat field when scanned (frames of another size than the flat's are not)
-    let flat = s.optics.flat.as_ref().filter(|_| {
-        std::fs::read(frames.join("r000_c000.json")).ok().and_then(|d| serde_json::from_slice::<Value>(&d).ok()).is_some_and(|m| m["flat_corrected"] == json!(true))
-    });
+    // corrected by the flat field when scanned (as the frames say): the frame size for MStitch's even flat
+    let flat = std::fs::read(frames.join("r000_c000.json"))
+        .ok()
+        .and_then(|d| serde_json::from_slice::<Value>(&d).ok())
+        .filter(|m| m["flat_corrected"] == json!(true))
+        .map(|m| (m["w"].as_u64().unwrap_or(0) as usize, m["h"].as_u64().unwrap_or(0) as usize));
     let profile = if s.optics.distorted() || s.optics.profile_path.is_none() || flat.is_some() {
         let z = s.optics.zoom();
         prof["m"] = json!(s.optics.m.map(|v| v / z));
         prof["k"] = json!([0.0, 0.0]);
         // the frames are corrected already: MStitch gets an even flat field, so it neither uses its own nor
         // estimates one from the frames
-        if let Some(f) = flat {
-            crate::flat::Flat::write_ones(&frames.join("flat_ones.npy"), f.w, f.h)?;
+        if let Some((w, h)) = flat {
+            crate::flat::Flat::write_ones(&frames.join("flat_ones.npy"), w, h)?;
             prof["flat"] = json!("flat_ones.npy");
             prof["flat_level"] = json!(2);
         }
@@ -375,7 +412,7 @@ mod e2e {
         let id = proj.add_selection(rect);
         let mut result: Option<(Rgb, Affine, f64, Vec<Cross>)> = None;
         for mode in [Mode::Quick, Mode::Quality] {
-            let s = Settings { optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0 }, surface: None };
+            let s = Settings { optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None };
             let base = out.join("scans").join(mode.name());
             let t1 = Instant::now();
             let job = start(link.clone(), id, mode, rect, s, base.join("frames"), base.join("map"));
@@ -539,7 +576,7 @@ mod e2e_lens {
             let id = proj.add_selection(*r);
             let mut ok = None;
             for attempt in 0..4 {
-                let s = Settings { optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0 }, surface: None };
+                let s = Settings { optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None };
                 let base = out.join(format!("scans/s{n}_{attempt}"));
                 let job = start(link.clone(), id, Mode::Quick, *r, s, base.join("frames"), base.join("map"));
                 match wait_scan(&job) {
@@ -630,7 +667,7 @@ mod e2e_focus {
         std::thread::sleep(std::time::Duration::from_millis(300));
         let optics = Optics::guess("sim", 0.22, [1296, 972]);
         let rect = Rect::from_corners([0.0, 0.0], [600.0, 400.0], 5.556);
-        let s = Settings { optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0 }, surface: Some(out.join("surface.csv")) };
+        let s = Settings { optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: Some(out.join("surface.csv")) };
         let job = start(link.clone(), 1, Mode::Quick, rect, s, out.join("scan/frames"), out.join("scan/map"));
         loop {
             let j = job.lock().unwrap();

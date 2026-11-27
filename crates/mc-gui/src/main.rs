@@ -338,7 +338,16 @@ impl App {
         };
         let mut report = vec![];
         let sels = self.proj.sample().selections.clone();
+        let base_id = self.proj.sample().lattice_sel;
+        // the base: the selection the lattice was marked on; it stays, the others come onto it cross to cross
+        let base = base_id.and_then(|id| sels.iter().find(|s| s.id == id)).and_then(|s| self.map_of(s).map(|(p, a)| (s.rect, p.pyr.base().clone(), a, s.objective.clone())));
         for s in &sels {
+            if Some(s.id) == base_id {
+                if base.is_some() {
+                    report.push(format!("{}: the base, stays", s.name));
+                }
+                continue;
+            }
             let Some(m) = s.best_scan().and_then(|sc| sc.map.clone()) else { continue };
             let (Some(p), Some(raw)) = (self.maps.get(&m), self.map_raw.get(&m)) else {
                 report.push(format!("{}: map not loaded yet", s.name));
@@ -346,9 +355,12 @@ impl App {
             };
             // from where the map stands now (a shift by hand included), not from scratch
             let now = s.fix.map(|f| raw.then(&f)).unwrap_or(*raw);
-            match align::align(&l, &s.rect, p.pyr.base(), &now) {
+            // the same objective as the base: its scale is right, only shift and turn
+            let rigid = base.as_ref().is_none_or(|b| b.3 == s.objective);
+            let b = base.as_ref().filter(|b| b.0.intersects(&s.rect)).map(|b| (&b.0, &b.1, &b.2));
+            match align::align_to(&l, &s.rect, p.pyr.base(), &now, b, rigid) {
                 Ok(a) => {
-                    report.push(format!("{}: {} crosses, moved {:.2} um, left {:.2} um", s.name, a.crosses, a.moved_um, a.rms_um));
+                    report.push(format!("{}: {} crosses{}, moved {:.2} um, left {:.2} um", s.name, a.crosses, if b.is_some() { " (on the base map)" } else { "" }, a.moved_um, a.rms_um));
                     if let Some(x) = self.proj.selection_mut(s.id) {
                         x.fix = Some(match x.fix {
                             Some(f) => f.then(&a.fix),
@@ -630,11 +642,8 @@ impl App {
         }
     }
 
-    pub fn start_scan(&mut self, id: u32, mode: project::Mode) {
-        let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
-        let stamp = now_text().replace([':', ' '], "-");
-        let base = format!("scans/{}_{}_{}", export::layer_name(&sel.name), mode.name(), stamp);
-        let s = scan::Settings {
+    pub fn scan_settings(&self, sel: &project::Selection, mode: project::Mode) -> scan::Settings {
+        scan::Settings {
             optics: self.proj.optics_of(&sel).clone(),
             overlap: if mode == project::Mode::Quick { self.proj.scan.overlap_quick } else { self.proj.scan.overlap_quality },
             settle_ms: self.proj.scan.settle_ms,
@@ -642,9 +651,29 @@ impl App {
             step_um: self.proj.step_um,
             mstitch: self.proj.scan.mstitch.clone(),
             wb: self.proj.wb,
-            focus: focus::Settings { on: self.proj.scan.autofocus, drop: self.proj.scan.focus_drop, max_um: self.proj.scan.focus_max_um, settle_ms: 0.0 },
+            focus: focus::Settings { on: self.proj.scan.autofocus, drop: self.proj.scan.focus_drop, max_um: self.proj.scan.focus_max_um, settle_ms: 0.0, window_um: self.proj.scan.focus_window_um },
             surface: Some(self.proj.path("surface.csv")),
-        };
+        }
+    }
+
+    /// The last scan's frames of this selection stitched again into a new map (nothing scanned).
+    pub fn restitch(&mut self, id: u32) {
+        let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
+        let Some(sc) = sel.scans.iter().rev().find(|sc| !sc.frames.is_empty()).cloned() else { return };
+        let frames = self.proj.path(&sc.frames);
+        let stamp = now_text().replace([':', ' '], "-");
+        let map = frames.parent().unwrap_or(&frames).join(format!("map_{stamp}"));
+        let s = self.scan_settings(&sel, sc.mode);
+        let job = scan::restitch(id, sc.mode, s, frames, map);
+        self.jobs.push(job);
+        self.message = format!("{}: stitching the {} scan again", sel.name, sc.mode.name());
+    }
+
+    pub fn start_scan(&mut self, id: u32, mode: project::Mode) {
+        let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
+        let stamp = now_text().replace([':', ' '], "-");
+        let base = format!("scans/{}_{}_{}", export::layer_name(&sel.name), mode.name(), stamp);
+        let s = self.scan_settings(&sel, mode);
         let job = scan::start(self.link.clone(), id, mode, sel.rect, s, self.proj.path(&format!("{base}/frames")), self.proj.path(&format!("{base}/map")));
         self.jobs.push(job);
     }
@@ -764,13 +793,14 @@ impl App {
             return;
         }
         let link = self.link.clone();
-        let s = focus::Settings { on: true, drop: 1.0, max_um: self.proj.scan.focus_max_um, settle_ms: self.proj.scan.settle_ms };
+        let s = focus::Settings { on: true, drop: 1.0, max_um: self.proj.scan.focus_max_um, settle_ms: self.proj.scan.settle_ms, window_um: self.proj.scan.focus_window_um };
         let dir = self.proj.path("focus");
         let surface = Some(self.proj.path("surface.csv"));
         let out = Arc::new(Mutex::new(None));
         let o2 = out.clone();
         std::thread::spawn(move || {
             let mut f = focus::Focus::new(s, &dir, surface, "by hand");
+            f.center = Some(p[2]);
             let r = f.shot(&link, p[0], p[1], p[2], &|| false).map(|sh| (sh.z, sh.sharpness, sh.probes));
             // the last probe may have been elsewhere in z: back to the sharpest
             if let Ok((z, _, _)) = &r {
@@ -784,6 +814,14 @@ impl App {
 
     /// Move a selection's map by hand by `d` um on the stage (before Align, to bring it near).
     pub fn nudge(&mut self, id: u32, d: P2) {
+        // the base map takes its lattice along: the crosses were marked on it
+        if self.proj.sample().lattice_sel == Some(id) {
+            let smp = self.proj.sample_mut();
+            for c in smp.crosses.iter_mut() {
+                c.at = [c.at[0] + d[0], c.at[1] + d[1]];
+            }
+            let _ = smp.refit();
+        }
         if let Some(s) = self.proj.selection_mut(id) {
             let t = geom::Affine([1.0, 0.0, d[0], 0.0, 1.0, d[1]]);
             s.fix = Some(match s.fix {

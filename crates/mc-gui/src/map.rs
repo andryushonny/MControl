@@ -421,20 +421,26 @@ fn add_cross(app: &mut App, at: P2) {
     let sample = app.proj.sample().clone();
     let mut p = at;
     let mut refined = false;
+    let mut on_sel = None;
     for s in sample.selections.iter().filter(|s| s.visible && s.rect.contains(at)) {
-        let Some(m) = s.best_scan().and_then(|sc| sc.map.clone()) else { continue };
-        let Some(pic) = app.maps.get(&m) else { continue };
-        let inv = pic.to_stage.inverse();
+        // the map where it is drawn now (its correction included), the topmost one under the click
+        let Some((pic, place)) = app.map_of(s) else { continue };
+        let inv = place.inverse();
         let uv = inv.apply(at);
-        let radius = (25.0 / pic.to_stage.scale()).clamp(12.0, 120.0) as usize; // about 25 um around the click
+        let radius = (25.0 / place.scale()).clamp(12.0, 120.0) as usize; // about 25 um around the click
         if let Some((u, v)) = cross::refine(pic.pyr.base(), uv[0], uv[1], radius) {
-            p = pic.to_stage.apply([u, v]);
+            p = place.apply([u, v]);
             refined = true;
+            on_sel = Some(s.id);
         }
         break;
     }
     // no numbers of our own: the operator signs the cross (X, Y) in the Lattice panel
     let s = app.proj.sample_mut();
+    // the first map crosses are marked on is the base: the lattice belongs to it
+    if s.lattice_sel.is_none_or(|id| !s.selections.iter().any(|x| x.id == id)) {
+        s.lattice_sel = on_sel;
+    }
     s.crosses.push(crate::project::Cross { at: p, label: None });
     let _ = s.refit();
     app.message = if refined { format!("cross at ({:.2}, {:.2}) um, centre found on the map: sign its X, Y on the right", p[0], p[1]) } else { "cross where clicked (no clear cross on a map there): sign its X, Y on the right".into() };

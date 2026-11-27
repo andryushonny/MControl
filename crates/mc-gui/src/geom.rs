@@ -259,6 +259,10 @@ impl Rect {
     pub fn contains(&self, p: P2) -> bool {
         p[0] >= self.x0 && p[0] <= self.x1 && p[1] >= self.y0 && p[1] <= self.y1
     }
+    pub fn intersects(&self, o: &Rect) -> bool {
+        self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
+    }
+
     pub fn union(&self, o: &Rect) -> Rect {
         Rect { x0: self.x0.min(o.x0), y0: self.y0.min(o.y0), x1: self.x1.max(o.x1), y1: self.y1.max(o.y1) }
     }
