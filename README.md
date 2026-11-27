@@ -5,7 +5,7 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
 ![Who runs what](docs/img/architecture.png)
 
 * **One exe** on the microscope PC, nothing to install there apart from the MindVision SDK. A colour log shows who is connected and what is sent.
-* **Full resolution, fast.** Raw Bayer frames are sent as the sensor gives them: no conversion on PC 1. Each frame carries the stage position at mid-exposure and the time on the shared clock.
+* **Full resolution, fast.** Bayer frames go out without colour conversion; PC 1 only packs them (lossless, or JPEG when the link is slow) so even a weak cable gives 10–20 fps. Each frame carries the stage position at mid-exposure and the time on the shared clock.
 * **One operator, many viewers.** The operator holds a lease. Viewers are read-only and get JPEG previews at up to 30 fps (25 by default), encoded once per frame and shared by all of them; 5 viewers at a time by default (`--max-viewers`). Every action of the operator is sent to all clients as an event, so viewers see what is done, by whom, and what came out.
 * **Local network by default.** Only local addresses may connect unless you say otherwise; see [Network and security](#network-and-security).
 * **Safe.** If the operator goes silent, the stage stops and the laser goes off. A separate guard process does the same over COM if the server itself hangs or dies.
@@ -58,6 +58,18 @@ The full walk-through is in [`examples/basics.ipynb`](examples/basics.ipynb): st
 
 ![frames](docs/img/frames.png)
 
+**Frame packing.** PC 1 packs full frames so that a slow link carries more. The client chooses with `Microscope(codec=...)`:
+
+| codec | how | size of a 2592 × 1944 frame* | error | fps on 100 Mbit | fps on 1 GbE |
+|---|---|---|---|---|---|
+| `raw` | as the sensor gives it | 5.0 MB | none | 2 | 23 |
+| `lossless` | same-colour neighbour difference + zstd | 2.8 MB | none | 4 | 40 |
+| `jpeg` 92 | each Bayer colour plane as JPEG | 1.0 MB | ≈ 2.5 DN rms | 11 | camera limit |
+| `jpeg` 85 | the same, quality 85 | 0.55 MB | ≈ 3 DN rms | 20 | camera limit |
+| **`auto`** (default) | snaps and re-fetches **lossless**; live frames lossless, one step down (JPEG 92 → 85 → 75) when the link drops frames, back up when the better step fits | | snaps exact | 10–20 | 40 |
+
+\* a real microscope frame with about 2 DN of sensor noise; the noise decides how small frames get. On PC 1 the packing takes about 5–20 ms per frame (lossless / JPEG planes in parallel); `mc-server codec-bench` measures it on your PC. `Frame.codec` says how a frame came, `Frame.exact` whether its pixels are the sensor's; `Frame.raw()` unpacks.
+
 **Events**: every viewer sees what the operator does, live:
 
 ![events](docs/img/events.png)
@@ -71,6 +83,7 @@ Viewer().watch()          # prints every operator action, like the server log
 
 | Object | What |
 |---|---|
+| `Microscope(codec="auto")` | full frames: `auto`, `lossless`, `jpeg` (with `quality=`), `raw`; see Frame packing |
 | `Microscope()` / `Microscope("192.168.1.50")` | operator. Without an address: `MCONTROL_HOST`, then the last server used, then LAN discovery |
 | `Viewer(fps=25)` | read-only: previews (`live()`, `latest()`), events, `fetch()` = one full frame per second |
 | `Microscope(token="...")` | only when the server asks for a token (or `MCONTROL_TOKEN`); remembered per server |
@@ -83,7 +96,7 @@ Viewer().watch()          # prints every operator action, like the server log
 | `m.live(seconds=, count=, fps=)` | live frames while you loop: `for f in m.live(seconds=5): ...` |
 | `m.latest()`, `m.fetch(seq)` | the newest frame; a re-fetch from the server ring |
 | `m.on_event(fn)`, `m.watch()` | events: every operator command (started / done / failed, with result), clients, telemetry (1 Hz), errors; `watch()` prints them as lines |
-| `Frame` | `raw()`, `rgb(full=False)`, `save()`, `meta`, `xyz_um`, `moving`, `settled_ms`, `t_local_ns`, `age_ms` |
+| `Frame` | `raw()`, `rgb(full=False)`, `save()`, `meta`, `xyz_um`, `moving`, `settled_ms`, `t_local_ns`, `age_ms`, `codec`, `exact` |
 
 ## Network and security
 
@@ -166,7 +179,7 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 
 ## Protocol (for other languages)
 * **Control** on TCP 5160: messages `[u32 LE length][u8 kind=1][JSON]`. First `{"cmd":"hello","role":"operator"|"viewer","name":...,"token":...}`, then `{"cmd":..., "id":n, ...}` → `{"id":n,"ok":true,...}` or `{"ok":false,"error":{"code","msg"}}`. Events come as `{"event":...}`.
-* **Data** on TCP 5161: `{"session":..., "want":"raw"|"preview"}`, then frames `[len][kind=2][u32 header length][header JSON][pixels]`.
+* **Data** on TCP 5161: `{"session":..., "want":"raw"|"preview", "codec":"auto"|"lossless"|"jpeg"|"raw", "quality":92}`, then frames `[len][kind=2][u32 header length][header JSON][payload]`. The header's `codec` says how the payload is packed: `lossless` = zstd of the difference to the same-colour pixel two to the left (first two columns: two rows up), wrapping; `jpeg` = 4 × `[u32 length][JPEG]` for the Bayer planes (x, y) = (0,0), (1,0), (0,1), (1,1).
 * **Discovery**: UDP broadcast `MCONTROL?` to port 5159; the answer has the name, the real ports and whether a token is needed.
 * **Events**: `command` (`state`: started / done / failed, `by`, `cmd`, `args`, `result`, `ms`), `client`, `operator`, `safe`, `error`, `telemetry`.
 * **Clock**: `ping {t1}` → `{t1,t2,t3}`. The offset comes from the sample with the smallest round trip among the last 32.

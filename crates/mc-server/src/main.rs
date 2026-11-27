@@ -5,6 +5,7 @@
 mod log;
 mod access;
 mod camera;
+mod codec;
 mod controller;
 mod frames;
 mod guard;
@@ -56,8 +57,13 @@ OTHER
   --config FILE     options from a file (default: mc-server.conf next to the exe, if it exists),
                     one per line: `bind = 192.168.1.10`, `allow-laser = true`; the command line wins
 
+FRAMES (the client chooses: Microscope(codec=...))
+  auto: snaps exact (lossless), live frames as good as the link carries: lossless, then JPEG 92 / 85 / 75
+  raw | lossless (~2:1, exact) | jpeg (~5-10:1, error about the sensor noise)
+
 COMMANDS
-  mc-server errors  all error codes as a table
+  mc-server errors       all error codes as a table
+  mc-server codec-bench  how fast and how small each codec is on this PC
 ";
 
 fn main() {
@@ -67,6 +73,38 @@ fn main() {
         Some("guard") => guard::guard_main(&args[1..]),
         Some("-h") | Some("--help") | Some("help") => {
             print!("{HELP}");
+            return;
+        }
+        Some("codec-bench") => {
+            // mc-server codec-bench [FILE W H]: how fast and how small each codec is on this PC
+            // (FILE: 8-bit Bayer, e.g. a frame saved with Frame.save("x.npy"); without it a synthetic 2592x1944 frame)
+            let (w, h) = (args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2592usize), args.get(3).and_then(|v| v.parse().ok()).unwrap_or(1944usize));
+            let px = match args.get(1) {
+                Some(f) => std::fs::read(f).expect("cannot read the file"),
+                None => {
+                    let mut r = 0x2545_F491_4F6C_DD1Du64;
+                    (0..w * h)
+                        .map(|i| {
+                            let (x, y) = (i % w, i / w);
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            let n = ((r & 7) + ((r >> 3) & 7)) as f64 / 2.0 - 3.5; // sensor noise, about +-2 DN
+                            (120.0 + 60.0 * ((x as f64 / 300.0).sin() * (y as f64 / 200.0).cos()) + n) as u8
+                        })
+                        .collect()
+                }
+            };
+            let px = px[px.len().saturating_sub(w * h)..].to_vec(); // .npy: skip its header
+            for (name, run) in [("lossless", 0u8), ("jpeg 92", 92), ("jpeg 85", 85), ("jpeg 75", 75)] {
+                let t = std::time::Instant::now();
+                let mut n = 0;
+                for _ in 0..10 {
+                    n = if run == 0 { codec::lossless(&px, w, h, 1).len() } else { codec::jpeg_planes(&px, w, h, run).len() };
+                }
+                let ms = t.elapsed().as_secs_f64() * 100.0;
+                println!("{name:9} {:6.1} ms/frame  {:5.2} MB  {:4.1} : 1", ms, n as f64 / 1e6, px.len() as f64 / n as f64);
+            }
             return;
         }
         Some("errors") => {

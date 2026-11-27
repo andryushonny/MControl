@@ -200,6 +200,7 @@ fn sim_frame(s: &mut Sim) -> Raw {
     let mut px = vec![0u8; w * h];
     let (cx, cy) = (s.pos[0], s.pos[1]);
     let blur = (s.pos[2].abs() / 20.0).min(1.0); // out of focus: lower contrast
+    let mut rng: u64 = 0x9E37_79B9_7F4A_7C15 ^ s.seq;
     for j in 0..h {
         let wy = cy + (j as f64 - h as f64 / 2.0) * s.px_um;
         let fy = wy.rem_euclid(100.0);
@@ -223,7 +224,12 @@ fn sim_frame(s: &mut Sim) -> Raw {
                 (1, 1) => 1.05,
                 _ => 1.0,
             };
-            px[j * w + i] = (v * c).clamp(0.0, 255.0) as u8;
+            // sensor noise, about +-2 DN, so compression behaves as on a real camera
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            let noise = ((rng & 7) as f64 + ((rng >> 3) & 7) as f64) / 2.0 - 3.5;
+            px[j * w + i] = (v * c + noise).clamp(0.0, 255.0) as u8;
         }
     }
     (t_end, w as i32, h as i32, "bayer_rg8".into(), 8, 0, s.exp_us, s.gain as f64, px)

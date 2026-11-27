@@ -142,12 +142,12 @@ D.frames = () => {
   const r = B.box(340, 235, 300, 200, "frame ring", "last 20 frames\nre-fetch by number", { fill: "blue", strong: true, size: 30 });
   for (let i = 0; i < 6; i++) B.rect(372 + i * 40, 380, 30, 30, { fill: i === 5 ? "green" : "white" });
   B.arrow(c.r, r.l, { label: "frames" });
-  const o = B.box(760, 130, 340, 130, "operator outbox", "RAW, newest wins\n+ snaps: never dropped", { fill: "green", size: 27 });
+  const o = B.box(760, 115, 340, 160, "operator outbox", "newest wins; packed: lossless,\nJPEG if the link is slow\nsnaps: lossless, never dropped", { fill: "green", size: 27 });
   const v = B.box(760, 400, 340, 130, "viewer outboxes", "JPEG preview, 25 fps\nencoded once, shared by all", { fill: "yellow", size: 27 });
   B.arrow([640, 300], [760, 195], { bend: "h", mid: 700 }); B.arrow([640, 370], [760, 465], { bend: "h", mid: 700 });
-  const p2 = B.box(1220, 140, 240, 110, "PC 2", "≈ 5 MB / frame", { fill: "green", size: 30 });
+  const p2 = B.box(1220, 140, 240, 110, "PC 2", "0.5–2.8 MB / frame", { fill: "green", size: 30 });
   const p3 = B.box(1220, 410, 240, 110, "PC 3…N", "≈ 5–50 kB / frame", { fill: "yellow", size: 30 });
   B.arrow(o.r, p2.l, { label: "thread" }); B.arrow(v.r, p3.l, { label: "thread each" });
-  B.text(40, 620, "The limit is the network, not PC 1's CPU: 1 GbE ≈ 110 MB/s ≈ 20 RAW frames/s for the operator; 5 viewers at 25 fps take a few MB/s.",
+  B.text(40, 620, "PC 1 packs each frame once (5–20 ms): 1 GbE carries ≈ 40 lossless frames/s, 100 Mbit ≈ 10–20 with JPEG.",
     { size: 23, anchor: "start", color: "#444" });
 };

@@ -3,6 +3,7 @@
 //! the camera thread only swaps a pointer into every outbox. A preview JPEG is made at most once per frame,
 //! by whichever viewer thread needs it first, and shared.
 
+use crate::codec::{self, Codec};
 use mc_proto::clock::now_ns;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -21,6 +22,26 @@ pub struct Frame {
     pub fmt: String,
     pub bits: u32,
     preview: OnceLock<(Vec<u8>, Vec<u8>)>,
+    packed: Mutex<Vec<(Pack, Arc<(Vec<u8>, Vec<u8>)>)>>,
+}
+
+/// How a full frame goes over the link: a codec and, for JPEG, its quality.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pack {
+    pub codec: Codec,
+    pub quality: u8,
+}
+
+impl Pack {
+    pub const RAW: Pack = Pack { codec: Codec::Raw, quality: 0 };
+    pub const LOSSLESS: Pack = Pack { codec: Codec::Lossless, quality: 0 };
+    /// What "auto" walks along: best first. Snaps and re-fetches never leave the top step.
+    pub const LADDER: [Pack; 4] = [Pack::LOSSLESS, Pack { codec: Codec::Jpeg, quality: 92 },
+                                   Pack { codec: Codec::Jpeg, quality: 85 }, Pack { codec: Codec::Jpeg, quality: 75 }];
+
+    pub fn label(self) -> String {
+        if self.codec == Codec::Jpeg { format!("jpeg {}", self.quality) } else { self.codec.name().into() }
+    }
 }
 
 impl Frame {
@@ -37,7 +58,33 @@ impl Frame {
             hdr,
             px,
             preview: OnceLock::new(),
+            packed: Mutex::new(Vec::new()),
         }
+    }
+
+    /// (header, payload) of the full frame packed with `p`; made once per pack, shared by all senders.
+    pub fn packed(&self, mut p: Pack) -> Arc<(Vec<u8>, Vec<u8>)> {
+        if p.codec == Codec::Jpeg && (self.bits > 8 || !self.fmt.starts_with("bayer")) {
+            p = Pack::LOSSLESS; // JPEG planes are for 8-bit Bayer only
+        }
+        if let Some(x) = self.packed.lock().unwrap().iter().find(|x| x.0 == p) {
+            return x.1.clone();
+        }
+        let bpp = if self.bits > 8 { 2 } else { 1 };
+        let payload = match p.codec {
+            Codec::Raw => self.px.clone(),
+            Codec::Lossless => codec::lossless(&self.px, self.w, self.h, bpp),
+            Codec::Jpeg => codec::jpeg_planes(&self.px, self.w, self.h, p.quality),
+        };
+        let mut m = self.meta.clone();
+        m["codec"] = json!(p.codec.name());
+        if p.codec == Codec::Jpeg {
+            m["quality"] = json!(p.quality);
+        }
+        m["raw_bytes"] = json!(self.px.len());
+        let x = Arc::new((serde_json::to_vec(&m).unwrap(), payload));
+        self.packed.lock().unwrap().push((p, x.clone()));
+        x
     }
 
     /// (header, JPEG) of the preview: 1/4 size colour picture.
@@ -135,6 +182,7 @@ pub struct Outbox {
     pub dropped: AtomicU64,
     pub last_sent_ns: AtomicU64,
     pub paused: std::sync::atomic::AtomicBool,
+    pub pack: Mutex<Pack>, // how the last full frame went: for the log
 }
 
 impl Outbox {
@@ -148,6 +196,7 @@ impl Outbox {
             dropped: AtomicU64::new(0),
             last_sent_ns: AtomicU64::new(0),
             paused: std::sync::atomic::AtomicBool::new(false),
+            pack: Mutex::new(Pack::RAW),
         })
     }
 

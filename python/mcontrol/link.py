@@ -214,12 +214,20 @@ class Link:
     def to_local_ns(self, t_server):
         return t_server - self.offset_ns
 
+    def _bye(self):
+        """Say goodbye and wait (briefly) for the answer: control is free when close() returns."""
+        slot = [threading.Event(), None]
+        with self._plock:
+            self._pending[-1] = slot
+        try:
+            self.w.send({"cmd": "bye", "id": -1})
+            slot[0].wait(1.0)
+        except OSError:
+            pass
+
     def close(self):
         if self.closed:
             return
         self.closed = True
-        try:
-            self.w.send({"cmd": "bye", "id": 0})
-        except OSError:
-            pass
+        self._bye()
         self.w.close()

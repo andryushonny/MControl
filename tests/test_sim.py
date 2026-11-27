@@ -204,3 +204,22 @@ def test_busy_port_moves_and_discovery_finds_it():
 def test_readme_lists_every_error():
     table = subprocess.run([EXE, "errors"], capture_output=True, text=True).stdout
     assert table.strip() in open(os.path.join(ROOT, "README.md"), encoding="utf-8").read().replace("\r", "")
+
+
+# ---------------------------------------------------------------- frame packing
+
+def test_codecs(server):
+    import numpy as np
+    with Microscope(HOST, codec="raw") as m, Viewer(HOST) as v:
+        f = m.snap()
+        assert f.codec == "raw" and f.exact
+        same = v.fetch(f.seq)                              # full frames to viewers go lossless
+        assert same.codec == "lossless" and len(same.data) < len(f.data) / 1.3
+        assert np.array_equal(same.raw(), f.raw())        # bit for bit
+    with Microscope(HOST, codec="jpeg", quality=85) as m:
+        f = m.snap()
+        assert f.codec == "jpeg 85" and not f.exact and len(f.data) < f.meta["raw_bytes"] / 4
+        assert f.raw().shape == f.shape
+    with Microscope(HOST) as m:                            # auto on a fast link: exact
+        assert m.snap().codec == "lossless"
+        assert all(fr.codec == "lossless" for fr in m.live(count=10))

@@ -3,7 +3,8 @@
 
 use crate::access::{random_id, Access};
 use crate::camera::Camera;
-use crate::frames::{Frame, Hub, Outbox, Want};
+use crate::codec::Codec;
+use crate::frames::{Frame, Hub, Outbox, Pack, Want};
 use crate::log::{paint, rate, Level, BLUE, BOLD, DIM, GREEN};
 use crate::stage::Stage;
 use mc_proto::clock::now_ns;
@@ -391,6 +392,14 @@ impl Server {
                 return;
             }
             "bye" => {
+                // control is free before the reply, so the client can hand over at once
+                let mut l = self.lease.lock().unwrap();
+                if l.as_ref().map_or(false, |h| Arc::ptr_eq(h, sess)) {
+                    *l = None;
+                    drop(l);
+                    self.safe_stop("operator left");
+                    self.event("operator", json!({"name": null}));
+                }
                 sess.send(&ok(&id, json!({})));
                 sess.alive.store(false, Ordering::Relaxed);
                 return;
@@ -541,12 +550,29 @@ impl Server {
         };
         let sid = hello["session"].as_str().unwrap_or("");
         let sess = self.sessions.lock().unwrap().iter().find(|s| s.id == sid).cloned();
-        let mut w = BufWriter::with_capacity(1 << 20, c);
+        // a small send buffer: on a slow link a write waits instead of queueing seconds of frames,
+        // so a snap goes out right behind the frame in flight and "auto" sees how busy the link really is
+        let _ = socket2::SockRef::from(&c).set_send_buffer_size(1 << 20);
+        let mut w = BufWriter::with_capacity(1 << 18, c);
         let Some(sess) = sess else {
             let _ = write_json(&mut w, &json!({"ok": false, "error": McError::new("E106", "").json()}));
             return;
         };
         let raw = hello["want"].as_str() == Some("raw");
+        // full frames: a fixed codec, or "auto" (the default): live frames as good as the link carries
+        let codec = hello["codec"].as_str().unwrap_or("auto");
+        let fixed: Option<Pack> = match codec {
+            "auto" => None,
+            "jpeg" => Some(Pack { codec: Codec::Jpeg, quality: f3(&hello, "quality").unwrap_or(92.0).clamp(30.0, 100.0) as u8 }),
+            c => match c.parse::<Codec>() {
+                Ok(k) => Some(Pack { codec: k, quality: 0 }),
+                Err(e) => {
+                    let _ = write_json(&mut w, &json!({"ok": false, "error": McError::new("E101", e).json()}));
+                    let _ = std::io::Write::flush(&mut w);
+                    return;
+                }
+            },
+        };
         let want = if raw {
             Want::Raw
         } else {
@@ -564,6 +590,7 @@ impl Server {
         let _ = w.flush();
         crate::debug!("DATA", "{} data link: {}", sess.who(), if raw { "full RAW stream" } else { "preview stream" });
         let _ = addr;
+        let mut auto = AutoPack::new();
         while let Some((f, preview, reliable)) = ob.next() {
             if !sess.alive.load(Ordering::Relaxed) {
                 break;
@@ -572,9 +599,24 @@ impl Server {
                 let (h, j) = f.preview();
                 write_frame(&mut w, h, j).map(|_| h.len() + j.len())
             } else {
-                write_frame(&mut w, &f.hdr, &f.px).map(|_| f.hdr.len() + f.px.len())
+                // snaps and re-fetches: exact pixels (unless a lossy codec was asked for); live: fixed or auto
+                let p = match fixed {
+                    Some(p) => p,
+                    None if reliable => Pack::LOSSLESS,
+                    None => auto.pack(),
+                };
+                *ob.pack.lock().unwrap() = p;
+                let x = f.packed(p);
+                write_frame(&mut w, &x.0, &x.1).map(|_| x.0.len() + x.1.len())
             };
-            match r.and_then(|n| w.flush().map(|_| n)) {
+            let r = r.and_then(|n| w.flush().map(|_| n));
+            if !preview && !reliable && fixed.is_none() {
+                if let Some(to) = auto.update(*r.as_ref().unwrap_or(&0), ob.dropped.load(Ordering::Relaxed)) {
+                    info!("DATA", "{}  live frames now {}{}", sess.who(), to.label(),
+                          if to == Pack::LOSSLESS { "" } else { " (link busy; snaps stay lossless)" });
+                }
+            }
+            match r {
                 Ok(n) => {
                     ob.sent_frames.fetch_add(1, Ordering::Relaxed);
                     ob.sent_bytes.fetch_add(n as u64 + 9, Ordering::Relaxed);
@@ -663,8 +705,9 @@ impl Server {
                         let (fr, by) = (ob.sent_frames.load(Ordering::Relaxed), ob.sent_bytes.load(Ordering::Relaxed));
                         let (pf, pb) = prev.get(&s.id).copied().unwrap_or((0, 0));
                         prev.insert(s.id.clone(), (fr, by));
-                        info!("DATA", "{}  {:.1} fps  {}  dropped {}  rtt {:.2} ms", s.who(), (fr - pf) as f64 / dt,
-                              rate((by - pb) as f64 / dt), ob.dropped.load(Ordering::Relaxed), s.rtt_us.load(Ordering::Relaxed) as f64 / 1000.0);
+                        let what = if *ob.want.lock().unwrap() == Want::Raw { ob.pack.lock().unwrap().label() } else { "preview".into() };
+                        info!("DATA", "{}  {:.1} fps  {}  {}  dropped {}  rtt {:.2} ms", s.who(), (fr - pf) as f64 / dt,
+                              rate((by - pb) as f64 / dt), what, ob.dropped.load(Ordering::Relaxed), s.rtt_us.load(Ordering::Relaxed) as f64 / 1000.0);
                     }
                 }
             }
@@ -720,6 +763,64 @@ fn is_read(cmd: &str) -> bool {
 fn client_json(sess: &Session, action: &str) -> Value {
     json!({"action": action, "role": if sess.role == Role::Operator { "operator" } else { "viewer" }, "name": sess.name,
            "addr": sess.addr.ip().to_string(), "after_s": ((now_ns() - sess.since) as f64 / 1e9).round()})
+}
+
+/// "auto" for live full frames: one step down the ladder (smaller, lossy) when frames get dropped because the
+/// link cannot keep up; one step back up when the better step would fit into what the link has shown it carries.
+struct AutoPack {
+    step: usize,
+    since: u64,
+    bytes: u64,
+    frames: u64,
+    dropped: u64,
+    calm: u32,
+    size: [f64; Pack::LADDER.len()], // average bytes per frame at each step (0: not seen yet)
+    capacity: f64,                    // bytes/s the link carried while it was the bottleneck (0: not seen yet)
+}
+
+impl AutoPack {
+    fn new() -> AutoPack {
+        AutoPack { step: 0, since: now_ns(), bytes: 0, frames: 0, dropped: u64::MAX, calm: 0, size: [0.0; Pack::LADDER.len()], capacity: 0.0 }
+    }
+
+    fn pack(&self) -> Pack {
+        Pack::LADDER[self.step]
+    }
+
+    /// After each live frame: its size and the outbox's drop counter. Returns the new pack if it changed.
+    fn update(&mut self, bytes: usize, dropped: u64) -> Option<Pack> {
+        self.bytes += bytes as u64;
+        self.frames += 1;
+        let s = &mut self.size[self.step];
+        *s = if *s == 0.0 { bytes as f64 } else { 0.8 * *s + 0.2 * bytes as f64 };
+        if self.dropped == u64::MAX {
+            self.dropped = dropped;
+        }
+        let window = (now_ns() - self.since) as f64 / 1e9;
+        if window < 1.0 {
+            return None;
+        }
+        let (lost, rate, fps) = (dropped - self.dropped, self.bytes as f64 / window, self.frames as f64 / window);
+        (self.since, self.bytes, self.frames, self.dropped) = (now_ns(), 0, 0, dropped);
+        let before = self.step;
+        if lost >= 2 {
+            self.capacity = self.capacity.max(rate); // the link was full: this is what it carries
+            self.calm = 0;
+            if self.step + 1 < Pack::LADDER.len() {
+                self.step += 1;
+            }
+        } else if lost == 0 && self.step > 0 {
+            self.calm += 1;
+            // the camera's rate at the better step, if it fits with a margin
+            let better = self.size[self.step - 1];
+            let need = (fps + lost as f64) * better;
+            if self.calm >= 3 && (self.capacity == 0.0 || need < 0.8 * self.capacity) {
+                self.step -= 1;
+                self.calm = 0;
+            }
+        }
+        (self.step != before).then(|| self.pack())
+    }
 }
 
 /// Build a frame from the worker's header: number it and add where the stage was during the exposure.

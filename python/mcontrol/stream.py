@@ -15,8 +15,9 @@ from .wire import DATA_PORT, K_FRAME, Wire
 class Stream:
     KEEP = 16                                   # frames kept for frame(seq)
 
-    def __init__(self, link, raw: bool, live: bool, fps=None):
+    def __init__(self, link, raw: bool, live: bool, fps=None, codec="auto", quality=None):
         self.link, self.raw, self.on, self.fps = link, raw, live, fps
+        self.codec, self.quality = codec, quality
         self.latest = None                      # newest frame
         self._kept = {}                         # (seq, is_preview) -> Frame
         self._cv = threading.Condition()
@@ -31,6 +32,10 @@ class Stream:
         hello = {"session": self.link.session, "want": "raw" if self.raw else "preview"}
         if self.fps:
             hello["fps"] = self.fps
+        if self.raw:
+            hello["codec"] = self.codec
+            if self.quality:
+                hello["quality"] = self.quality
         w.send(hello)
         r = w.recv_json()
         if not r.get("ok"):

@@ -124,6 +124,7 @@ class _Client:
     ROLE = "viewer"
     RAW = False
     _fps = None                                 # preview rate asked by a Viewer
+    _codec, _quality = "auto", None             # how full frames are packed (Microscope)
 
     def __init__(self, host=None, name=None, token=None, timeout=120.0):
         """host: "192.168.1.50", "pc-1:5170", "[fe80::1]"; omitted: MCONTROL_HOST, the last server used,
@@ -140,7 +141,7 @@ class _Client:
     def stream(self) -> Stream:
         """Data connection, opened on first use."""
         if self._stream is None:
-            self._stream = Stream(self.link, raw=self.RAW, live=not self.RAW, fps=self._fps)
+            self._stream = Stream(self.link, raw=self.RAW, live=not self.RAW, fps=self._fps, codec=self._codec, quality=self._quality)
         return self._stream
 
     def live(self, seconds=None, count=None, fps=None):
@@ -158,6 +159,13 @@ class _Client:
                 yield f
         finally:
             s.live(was)
+
+    def fetch(self, seq=0):
+        """A full frame from the server's ring by number (0: the newest), e.g. one you missed.
+        Viewers: at most one per second."""
+        s = self.stream                         # the data link must be open to receive it
+        r = self.link.call("frame", idempotent=True, seq=seq, preview=False)
+        return s.frame(r["seq"], preview=False)
 
     def latest(self, timeout=5.0):
         """The newest frame (waits for the first one)."""
@@ -208,11 +216,6 @@ class Viewer(_Client):
         super().__init__(host, name, token, timeout)
         self._fps = fps
 
-    def fetch(self, seq=0):
-        """One full frame from the ring (0 = newest), at most 1/s for viewers."""
-        r = self.link.call("frame", idempotent=True, seq=seq, preview=False)
-        return self.stream.frame(r["seq"], preview=False)
-
 
 class Microscope(_Client):
     """Operator: holds the lease (one at a time), full RAW frames, controls everything.
@@ -220,7 +223,10 @@ class Microscope(_Client):
     ROLE = "operator"
     RAW = True
 
-    def __init__(self, host=None, name=None, token=None, timeout=120.0):
+    def __init__(self, host=None, name=None, token=None, codec="auto", quality=None, timeout=120.0):
+        """codec for full frames: "auto" (default: snaps exact, live frames as good as the link carries),
+        "lossless" (always exact, ~2x smaller), "jpeg" (quality 30..100, default 92), "raw"."""
+        self._codec, self._quality = codec, quality
         super().__init__(host, name, token, timeout)
         l = self.link
         self.stage, self.camera, self.light, self.laser, self.cooler = Stage(l), Camera(l), Light(l), Laser(l), Cooler(l)
@@ -233,11 +239,6 @@ class Microscope(_Client):
         s = self.stream
         r = self.link.call("snap", idempotent=not rel, **a)
         return s.frame(r["seq"], timeout=(timeout_ms or 5000) / 1000 + 5)
-
-    def fetch(self, seq):
-        """Re-fetch a frame still in the server ring (e.g. one you missed)."""
-        r = self.link.call("frame", idempotent=True, seq=seq)
-        return self.stream.frame(r["seq"])
 
     def stop(self):
         """Stage stops now."""
