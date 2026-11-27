@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::io::BufWriter;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -134,6 +134,10 @@ pub struct Server {
     pub lease: Mutex<Option<Arc<Session>>>,
     pub cfg: Cfg,
     pub started: u64,
+    /// browsers watching the live picture on the web page (each one a viewer place)
+    pub web_viewers: AtomicUsize,
+    /// what the operator's program says it is doing (project, sample, task, progress, time left), and when
+    pub work: Mutex<Option<(u64, Value)>>,
 }
 
 fn ok(id: &Value, mut v: Value) -> Value {
@@ -157,7 +161,8 @@ impl Server {
     pub fn new(stage: Arc<Stage>, cam: Arc<Camera>, hub: Arc<Hub>, cfg: Cfg) -> Arc<Server> {
         Arc::new(Server { refused: Mutex::new(HashMap::new()), queue: Mutex::new(VecDeque::new()), queue_cv: Condvar::new(),
                           next_n: AtomicU64::new(0), cancel: AtomicU64::new(0), exclusive: Mutex::new(None), history: Mutex::new(VecDeque::new()),
-                          stage, cam, hub, sessions: Mutex::new(Vec::new()), lease: Mutex::new(None), cfg, started: now_ns() })
+                          stage, cam, hub, sessions: Mutex::new(Vec::new()), lease: Mutex::new(None), cfg, started: now_ns(),
+                          web_viewers: AtomicUsize::new(0), work: Mutex::new(None) })
     }
 
     /// Refuse a client before it gets a session; logged once a minute per address (scanners stay quiet).
@@ -199,6 +204,23 @@ impl Server {
             std::thread::spawn(move || s.control_conn(c));
         }
         Ok(())
+    }
+
+    /// Viewers now: clients with the viewer role and browsers on the web page.
+    pub fn viewer_count(&self) -> usize {
+        self.sessions.lock().unwrap().iter().filter(|s| s.role == Role::Viewer).count() + self.web_viewers.load(Ordering::SeqCst)
+    }
+
+    pub fn queued(&self) -> usize {
+        self.queue.lock().unwrap().len()
+    }
+
+    /// The last `n` commands run, newest first, for the web page.
+    pub fn recent_commands(&self, n: usize) -> Vec<Value> {
+        self.history.lock().unwrap().iter().rev().filter(|e| e["event"] == "command").take(n)
+            .map(|e| json!({"n": e["n"], "by": e["by"], "cmd": e["cmd"], "args": e["args"], "state": e["state"], "ms": e["ms"],
+                            "t_wall_ms": e["t_wall_ms"], "error": e["error"]["msg"]}))
+            .collect()
     }
 
     fn holder(&self) -> Option<Arc<Session>> {
@@ -263,7 +285,7 @@ impl Server {
         } else if role != Role::Viewer && !a.may_operate(&addr.ip()) {
             Some(McError::new("E113", addr.ip().to_string()))
         } else if role == Role::Viewer
-            && self.sessions.lock().unwrap().iter().filter(|s| s.role == Role::Viewer).count() >= self.cfg.max_viewers
+            && self.viewer_count() >= self.cfg.max_viewers
         {
             Some(McError::new("E114", format!("{} at most", self.cfg.max_viewers)))
         } else {
@@ -402,6 +424,23 @@ impl Server {
                 sess.send(&json!({"ok": true, "id": id, "t1": v["t1"], "t2": t2, "t3": now_ns()}));
                 if let Some(r) = v["rtt_us"].as_u64() {
                     sess.rtt_us.store(r, Ordering::Relaxed);
+                }
+                return;
+            }
+            "work" => {
+                // the operator's program tells what it is doing: shown on the web page, not queued, not logged
+                if sess.role == Role::Viewer {
+                    sess.send(&err(&id, &McError::new("E102", "work")));
+                } else {
+                    let mut w = v.clone();
+                    if let Some(o) = w.as_object_mut() {
+                        o.remove("cmd");
+                        o.remove("id");
+                    }
+                    w["device"] = json!(sess.name);
+                    w["ip"] = json!(sess.addr.ip().to_string());
+                    *self.work.lock().unwrap() = Some((now_ns(), w));
+                    sess.send(&ok(&id, json!({})));
                 }
                 return;
             }

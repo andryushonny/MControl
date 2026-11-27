@@ -216,6 +216,14 @@ impl Link {
         c.cmd(v).map_err(|e| e.to_string())
     }
 
+    /// A command whose answer does not matter (e.g. telling the server what we do; older servers do not know it).
+    pub fn tell(self: &Arc<Self>, v: Value) {
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let _ = me.call(v);
+        });
+    }
+
     /// A command from the UI: runs on its own thread; errors go to the log.
     pub fn send(self: &Arc<Self>, v: Value) {
         let me = self.clone();

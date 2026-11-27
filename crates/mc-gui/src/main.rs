@@ -133,6 +133,9 @@ pub struct App {
     pub focusing: Option<Arc<Mutex<Option<Result<(f64, f64, usize), String>>>>>,
     /// the selection whose map the arrows move by hand (Move map)
     pub nudging: Option<u32>,
+    /// when the work was last told to the server (for its web page), and when the last scan ended
+    pub told: Instant,
+    pub finished: Option<String>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -202,6 +205,8 @@ impl App {
             label_edits: HashMap::new(),
             focusing: None,
             nudging: None,
+            told: Instant::now(),
+            finished: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -470,6 +475,7 @@ impl App {
             };
             let id = jb.selection;
             drop(jb);
+            self.finished = Some(chrono::Local::now().format("%H:%M").to_string());
             if let Some(s) = self.proj.selection_mut(id) {
                 // a new map: Align's correction was for the old one
                 if entry.map.is_some() && s.fix.take().is_some() {
@@ -645,6 +651,51 @@ impl App {
         self.changed();
     }
 
+    /// What the program is doing, for the server's web page: project, sample, objective, the task and its
+    /// progress, the time left.
+    fn tell_work(&mut self) {
+        let sels = self.proj.sample().selections.clone();
+        let name = |id: u32| sels.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
+        let (mut state, mut task, mut done, mut total, mut busy, mut waiting) = ("Idle".to_string(), String::new(), 0usize, 0usize, false, false);
+        for j in &self.jobs {
+            let j = j.lock().unwrap();
+            match j.phase {
+                scan::Phase::Scanning => {
+                    state = format!("Scanning ({})", j.mode.name());
+                    task = format!("{}: frame {} of {}", name(j.selection), j.done, j.total);
+                    (done, total, busy) = (j.done, j.total, true);
+                }
+                scan::Phase::Stitching if !busy => {
+                    state = "Stitching".into();
+                    task = format!("{} ({} frames)", name(j.selection), j.done);
+                    busy = true;
+                }
+                _ => {}
+            }
+        }
+        if let Some(c) = &self.calib {
+            let c = c.lock().unwrap();
+            state = "Calibrating".into();
+            task = format!("{} {}/{}", c.phase, c.done, c.total);
+            (done, total, busy) = (c.done, c.total, true);
+        }
+        if let Some(o) = &self.wait_objective {
+            state = format!("Waiting: put the {o} objective on");
+            waiting = true;
+        } else if self.paused && !self.queue.is_empty() {
+            state = "Paused".into();
+            waiting = true;
+        } else if !busy && self.focusing.is_some() {
+            state = "Focusing".into();
+            busy = true;
+        }
+        let eta = self.time_left();
+        let w = serde_json::json!({"cmd": "work", "project": self.proj.name, "sample": self.proj.sample().name,
+            "objective": self.proj.optics().objective, "queue": self.queue.len(), "state": state, "task": task,
+            "done": done, "total": total, "busy": busy, "waiting": waiting, "eta_s": eta, "finished": self.finished});
+        self.link.tell(w);
+    }
+
     /// Stop: the stage, the scan running (its frames so far are kept), and the queue pauses.
     pub fn stop_all(&mut self) {
         self.link.send(serde_json::json!({"cmd": "stop"}));
@@ -760,6 +811,10 @@ impl eframe::App for App {
             self.cam_applied = false;
         }
         self.watch_objective();
+        if self.told.elapsed().as_secs_f64() >= 2.0 {
+            self.told = Instant::now();
+            self.tell_work();
+        }
         let done = self.focusing.as_ref().and_then(|f| f.lock().unwrap().take());
         {
             if let Some(r) = done {

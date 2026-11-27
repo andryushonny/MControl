@@ -49,6 +49,10 @@ with Microscope() as m:                 # finds the server on the LAN, remembers
 ```
 The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, camera, snap, grid scan, live stream, events, viewers, errors.
 
+## Web page
+
+`mc-server.exe` also serves a page for anyone in the lab: open `http://<PC 1 address>:8080` (the banner shows it) on a computer, laptop or tablet. It shows the live picture, what the operator's program is doing (state, progress, time left, when it finished), who operates from which PC, the project, sample and objective, the stage, light and laser, and the last 10 commands. Read only; each open page takes one viewer place (`--max-viewers`). `--web-port N` to change the port, `--no-web` to switch it off.
+
 ## mc-operator: the program on PC 2
 
 `mc-operator.exe` from [Releases](../../releases): the map of the stage with the live picture, selections, scans stitched by [MStitch](https://github.com/andryushonny/MStitch), the lattice of crosses, cutting into squares and the DXF for AutoCAD. Rust, the GPU draws (wgpu: DirectX 12 / Vulkan; `MC_RENDERER=glow` for old OpenGL-only PCs); stitched maps of 10 000+ px are drawn from 512 px tiles at the level the zoom needs.

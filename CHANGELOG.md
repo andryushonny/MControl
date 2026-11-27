@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+- mc-server has a web page for anyone in the lab: `http://<PC 1>:8080` (shown in the banner; `--web-port N`, `--no-web`), inside the exe. The live picture (small MJPEG; each open page takes one viewer place), what the operator's program is doing (state, task, progress bar, time left and when it will be done, or when it finished), the operator's PC and address, project, sample, objective, queue, the stage, light and laser, and the last 10 commands. For computers, laptops and tablets. Read only.
+- mc-operator tells the server what it is doing every 2 s (the `work` command).
+
 ## 0.6.0
 - *Controls* window, to make the program comfortable for whoever sits at the microscope, however it stands:
   1. the picture on the screen: rotate left / right by 90 degrees, mirror left-right / up-down (the view only);

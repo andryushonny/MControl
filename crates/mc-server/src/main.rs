@@ -12,6 +12,7 @@ mod guard;
 mod mindvision;
 mod net;
 mod stage;
+mod web;
 
 use log::{paint, BOLD, CYAN, DIM, GREEN, YELLOW};
 use mc_proto::clock::now_ns;
@@ -51,7 +52,9 @@ OTHER
   --ring N          frames kept for re-fetch (default 20)
   --dead-ms N       operator silent this long: stop stage, laser off (default 3000)
   --viewer-fps F    preview frames per second for viewers (default 25, at most 30)
-  --max-viewers N   viewers at the same time (default 5); the operator does not count
+  --max-viewers N   viewers at the same time (default 5); the operator does not count; each open web page is one
+  --web-port N      the web page with the live picture and the state (default 8080; if busy, the next free)
+  --no-web          no web page
   --no-guard        do not start the guard process
   --log FILE        also write the log to FILE
   --no-color        plain log
@@ -296,6 +299,10 @@ fn main() {
         access,
     };
     let ip = if bind.is_unspecified() { primary_ip() } else { bind.to_string() };
+    // the web page (--web-port N, default 8080; --no-web)
+    let web_l = if has("--no-web") { None } else { web::listen(bind, arg("--web-port").and_then(|v| v.parse().ok()).unwrap_or(8080)) };
+    let web_port = web_l.as_ref().map(|(_, p)| *p);
+    let web_l = web_l.map(|(l, _)| l);
     let row = |k: &str, v: String, note: &str| println!("  {}  {}  {}", paint(DIM, &format!("{k:<10}")), v, paint(DIM, note));
     let a = &ncfg.access;
     row("Name", paint(BOLD, &name), "");
@@ -312,9 +319,16 @@ fn main() {
         row("Operators", a.operators_text.clone(), "Others connect as viewers");
     }
     row("Laser", if cfg.allow_laser { paint(YELLOW, "Allowed") } else { "Blocked".into() }, if cfg.allow_laser { "" } else { "--allow-laser to allow" });
+    match web_port {
+        Some(p) => row("Web", paint(CYAN, &format!("http://{ip}:{p}")), "Live picture, state and the last commands, for anyone in the lab (one viewer place each)"),
+        None => row("Web", "Off".into(), ""),
+    }
     row("Stop", paint(GREEN, "Ctrl+C"), "Stage stops; laser, motors and light off");
     println!();
     let srv = net::Server::new(st.clone(), cam.clone(), hub, ncfg);
+    if let Some(l) = web_l {
+        web::serve(srv.clone(), l);
+    }
 
     // ---- Ctrl+C: safe state, tell the guard, leave
     let (st2, cam2) = (st.clone(), cam.clone());

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microscope</title>
+<style>
+  :root { --bg:#16181b; --card:#202328; --line:#2e3238; --text:#e6e6e6; --dim:#8b9098; --green:#3cc83c; --amber:#f0b43c; --red:#e85a46; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); display: inline-block; }
+  .dot.on { background: var(--green); } .dot.off { background: var(--red); }
+  .dim { color: var(--dim); }
+  main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 10px; gap: 10px; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .video { padding: 0; overflow: hidden; position: relative; background: #000; aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; }
+  .video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video .msg { position: absolute; color: var(--dim); padding: 20px; text-align: center; }
+  .state { font-size: 22px; font-weight: 600; margin: 2px 0 8px; }
+  .state.idle { color: var(--green); } .state.busy { color: var(--amber); } .state.wait { color: var(--red); }
+  .bar { height: 20px; background: #12150f; border: 1px solid #466e46; border-radius: 3px; padding: 2px; display: flex; gap: 2px; margin: 8px 0 4px; }
+  .bar i { flex: 1; background: transparent; }
+  .bar i.f { background: var(--green); }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row b { font-weight: 500; text-align: right; }
+  .side { display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 900px) { .side { gap: 10px; } }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 8px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 6px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.n { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; width: 1%; padding-right: 14px; }
+  td.t { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; width: 1%; padding-right: 14px; }
+  td.fail { color: var(--red); }
+  .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-size: 13px; }
+  .laser { background: var(--red); color: #fff; padding: 1px 8px; border-radius: 4px; font-weight: 600; }
+  .commands { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot" class="dot"></span>
+  <h1 id="name">Microscope</h1>
+  <span id="sub" class="dim"></span>
+  <span style="flex:1"></span>
+  <span id="viewers" class="dim"></span>
+</header>
+<main>
+  <div class="card video">
+    <img id="live" alt="">
+    <div id="vmsg" class="msg">connecting to the camera…</div>
+  </div>
+  <div class="side">
+    <div class="card">
+      <h2>Now</h2>
+      <div id="state" class="state">—</div>
+      <div id="task" class="dim"></div>
+      <div id="bar" class="bar" style="display:none"></div>
+      <div id="left" class="mono"></div>
+    </div>
+    <div class="card">
+      <h2>Work</h2>
+      <div class="row"><span class="dim">Operator</span><b id="op">—</b></div>
+      <div class="row"><span class="dim">Project</span><b id="proj">—</b></div>
+      <div class="row"><span class="dim">Sample</span><b id="sample">—</b></div>
+      <div class="row"><span class="dim">Objective</span><b id="obj">—</b></div>
+      <div class="row"><span class="dim">Queue</span><b id="queue">—</b></div>
+    </div>
+    <div class="card">
+      <h2>Microscope</h2>
+      <div class="row"><span class="dim">Stage</span><b id="pos" class="mono">—</b></div>
+      <div class="row"><span class="dim">Light</span><b id="light">—</b></div>
+      <div class="row"><span class="dim">Laser</span><b id="laser">—</b></div>
+      <div class="row"><span class="dim">Camera</span><b id="cam">—</b></div>
+    </div>
+  </div>
+  <div class="card commands">
+    <h2>Last 10 commands</h2>
+    <table><tbody id="cmds"><tr><td class="dim">—</td></tr></tbody></table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const mmss = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const args = a => a && typeof a === "object" ? Object.entries(a).map(([k, v]) => `${k}=${typeof v === "number" ? Math.round(v * 10) / 10 : v}`).join(" ") : "";
+const clock = ms => ms ? new Date(ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : "";
+
+// the live picture: one viewer place while this page is open
+let retry = null;
+function live() {
+  const img = $("live");
+  img.onload = () => { $("vmsg").style.display = "none"; };
+  img.onerror = () => {
+    $("vmsg").style.display = ""; $("vmsg").textContent = "no picture (all viewer places taken, or the server is off): trying again…";
+    clearTimeout(retry); retry = setTimeout(live, 5000);
+  };
+  img.src = "/stream?" + Date.now();
+}
+live();
+document.addEventListener("visibilitychange", () => { if (document.hidden) { $("live").src = ""; } else { live(); } });
+
+async function tick() {
+  try {
+    const r = await fetch("/status", {cache: "no-store"});
+    const s = await r.json();
+    $("dot").className = "dot on";
+    $("name").textContent = s.name;
+    $("sub").textContent = `MControl ${s.version} · camera ${s.camera_fps} fps`;
+    $("viewers").textContent = `viewers ${s.viewers} of ${s.max_viewers}`;
+    const w = s.work || {};
+    const op = s.operator ? `${esc(s.operator.name)} <span class="dim">${esc(s.operator.ip)}</span>` : "nobody";
+    $("op").innerHTML = op;
+    $("proj").textContent = w.project || "—";
+    $("sample").textContent = w.sample || "—";
+    $("obj").textContent = w.objective || "—";
+    $("queue").textContent = w.queue != null ? `${w.queue} waiting` : (s.queue ? `${s.queue} commands` : "empty");
+    // the state, as the operator's program reports it
+    let state = "Idle", cls = "idle", task = "", frac = null, left = "";
+    if (!s.operator) { state = "No operator"; cls = "idle"; task = "nobody controls the microscope"; }
+    else if (w.stale) { state = "No news"; cls = "wait"; task = "the operator's program has not reported for a while"; }
+    else if (w.state) {
+      state = w.state; cls = w.busy ? "busy" : (w.waiting ? "wait" : "idle");
+      task = w.task || "";
+      if (w.total) frac = w.done / w.total;
+      if (w.eta_s > 0) left = `${mmss(w.eta_s)} left · done about ${new Date(Date.now() + w.eta_s * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
+      else if (w.finished) left = `finished ${w.finished}`;
+    }
+    $("state").textContent = state; $("state").className = "state " + cls;
+    $("task").textContent = task;
+    const bar = $("bar");
+    if (frac != null) {
+      bar.style.display = "";
+      const n = 30, f = Math.round(frac * n);
+      if (bar.children.length !== n) bar.innerHTML = "<i></i>".repeat(n);
+      [...bar.children].forEach((b, k) => b.className = k < f ? "f" : "");
+    } else bar.style.display = "none";
+    $("left").textContent = left;
+    const st = s.stage || {};
+    const p = st.pos_um || [];
+    $("pos").textContent = p.length ? `${p[0].toFixed(1)}, ${p[1].toFixed(1)}, ${p[2].toFixed(1)} µm${st.moving ? " · moving" : ""}` : "—";
+    $("light").textContent = st.light ? `on, level ${st.light}` : "off";
+    $("laser").innerHTML = st.laser_mw ? `<span class="laser">ON ${st.laser_mw} mW</span>` : "off";
+    $("cam").textContent = s.camera_fps > 0 ? `${s.camera_fps} fps` : "no frames";
+    const rows = (s.commands || []).map(c => `<tr><td class="t">${clock(c.t_wall_ms)}</td><td class="n">#${c.n}</td>` +
+      `<td class="${c.state === "failed" ? "fail" : ""}"><b>${esc(c.cmd)}</b> <span class="mono dim">${esc(args(c.args))}</span>` +
+      `${c.error ? " · " + esc(c.error) : ""}</td><td class="t">${esc(c.by)}</td></tr>`).join("");
+    $("cmds").innerHTML = rows || `<tr><td class="dim">none yet</td></tr>`;
+  } catch (e) {
+    $("dot").className = "dot off";
+    $("sub").textContent = "server not answering";
+  }
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
