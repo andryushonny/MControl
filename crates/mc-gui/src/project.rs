@@ -64,7 +64,9 @@ impl Selection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Cross {
     pub at: P2,
-    pub label: [i32; 2],
+    /// its lattice numbers (X, Y), as the operator signed it; None until signed
+    #[serde(default)]
+    pub label: Option<[i32; 2]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,7 +93,12 @@ impl Sample {
     }
 
     pub fn refit(&mut self) -> Result<(), String> {
-        let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().map(|c| (c.at, c.label)).collect();
+        // only crosses the operator has signed: the numbers of all the others follow from them
+        let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|l| (c.at, l))).collect();
+        if marks.len() < 2 {
+            self.lattice = None;
+            return Ok(());
+        }
         match Lattice::fit(&marks) {
             Ok(l) => {
                 self.lattice = Some(l);

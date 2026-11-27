@@ -111,6 +111,8 @@ pub struct App {
     pub watch: watch::Watch,
     /// the notice about it: (text, the objective to switch to, when)
     pub objective_hint: Option<(String, Option<String>, Instant)>,
+    /// X, Y being typed for crosses not signed yet (by cross index)
+    pub label_edits: HashMap<usize, (String, String)>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -167,6 +169,7 @@ impl App {
             cam_applied: false,
             watch: watch::Watch::new(),
             objective_hint: None,
+            label_edits: HashMap::new(),
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),

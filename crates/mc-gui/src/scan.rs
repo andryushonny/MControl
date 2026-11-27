@@ -214,6 +214,12 @@ fn stitch(s: &Settings, mode: Mode, frames: &Path, map: &Path, job: &Mutex<Job>)
     let mut parts = s.mstitch.split_whitespace();
     let exe = parts.next().ok_or("MStitch command is empty (Settings)")?;
     let mut cmd = std::process::Command::new(exe);
+    // no console window popping up on Windows
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     cmd.args(parts).arg("stitch").arg(frames).arg("--profile").arg(&profile).arg("--mode").arg(mode.name()).arg("--out").arg(map);
     let out = cmd.output().map_err(|e| format!("cannot start MStitch ({}): {e}", s.mstitch))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
@@ -383,7 +389,7 @@ mod e2e {
                 let e = ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt();
                 println!("  cross ({x}, {y}): found ({:.3}, {:.3}) um, off by {e:.3} um", p[0], p[1]);
                 worst = worst.max(e);
-                marks.push(Cross { at: p, label: [(x / 100.0) as i32, (y / 100.0) as i32] });
+                marks.push(Cross { at: p, label: Some([(x / 100.0) as i32, (y / 100.0) as i32]) });
             }
             assert!(worst < 0.2, "crosses off by {worst} um");
             proj.sample_mut().selections[0].scans.push(Scan { mode, frames: format!("scans/{}/frames", mode.name()), map: Some(format!("scans/{}/map", mode.name())), n_frames: n, when: "e2e".into(), note: String::new() });
@@ -515,7 +521,7 @@ mod e2e_lens {
             let t = node(i as f64, j as f64);
             let uv = a0.inverse().apply([t[0] + 1.5, t[1] - 1.0]);
             let (u, v) = crate::cross::refine(m0, uv[0], uv[1], (20.0 / a0.scale()) as usize).expect("cross");
-            crosses.push(Cross { at: a0.apply([u, v]), label: [i, j] });
+            crosses.push(Cross { at: a0.apply([u, v]), label: Some([i, j]) });
         }
         proj.sample_mut().crosses = crosses;
         proj.sample_mut().refit().unwrap();

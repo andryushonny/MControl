@@ -37,7 +37,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let stage = app.link.stage_pos();
 
     // ---- input: pan, zoom, keys
-    if resp.dragged_by(egui::PointerButton::Primary) && app.tool == Tool::Explore || resp.dragged_by(egui::PointerButton::Middle) || resp.dragged_by(egui::PointerButton::Secondary) {
+    if resp.dragged_by(egui::PointerButton::Primary) || resp.dragged_by(egui::PointerButton::Middle) || resp.dragged_by(egui::PointerButton::Secondary) {
         let d = resp.drag_delta();
         let a = view.to_stage(rect.center());
         let b = view.to_stage(rect.center() - d);
@@ -91,7 +91,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     for c in &sample.crosses {
         let p = view.to_screen(c.at);
         painter.circle_stroke(p, 7.0, Stroke::new(2.0, Color32::from_rgb(255, 60, 60)));
-        painter.text(p + egui::vec2(9.0, -9.0), Align2::LEFT_BOTTOM, format!("{},{}", c.label[0], c.label[1]), FontId::monospace(12.0), Color32::from_rgb(255, 90, 90));
+        let (t, col) = match c.label {
+            Some(l) => (format!("{},{}", l[0], l[1]), Color32::from_rgb(255, 90, 90)),
+            None => ("?".to_string(), Color32::from_gray(200)),
+        };
+        painter.text(p + egui::vec2(9.0, -9.0), Align2::LEFT_BOTTOM, t, FontId::monospace(12.0), col);
     }
     if let Some(p) = stage {
         let s = view.to_screen([p[0], p[1]]);
@@ -296,14 +300,17 @@ fn lattice(painter: &egui::Painter, view: &View, l: &geom::Lattice, sample: &cra
     }
     // numbers in the top left corner of each square (as the screen shows it), once 2 crosses are marked
     let cell_px = geom::len(l.a) * view.scale;
-    if cell_px > 40.0 && sample.crosses.len() >= 2 {
+    if cell_px > 40.0 && sample.crosses.iter().filter(|c| c.label.is_some()).count() >= 2 {
         let size = (cell_px / 9.0).clamp(10.0, 20.0) as f32;
+        let orient = export::Orient::of(l, view.flip_x, view.flip_y, view.turn);
         for c in &cells {
             let (i, j) = (c[0] as f64, c[1] as f64);
             let corners = [l.at(i, j), l.at(i + 1.0, j), l.at(i + 1.0, j + 1.0), l.at(i, j + 1.0)].map(|p| view.to_screen(p));
             let tl = corners.iter().min_by(|a, b| (a.x + a.y).partial_cmp(&(b.x + b.y)).unwrap()).copied().unwrap();
             if view.rect.contains(tl) {
-                painter.text(tl + egui::vec2(4.0, 3.0), Align2::LEFT_TOP, format!("{},{}", c[0], c[1]), FontId::monospace(size), Color32::from_rgba_unmultiplied(255, 70, 70, 220));
+                // the number of the cross at this corner
+                let n = orient.top_left(*c);
+                painter.text(tl + egui::vec2(4.0, 3.0), Align2::LEFT_TOP, format!("{},{}", n[0], n[1]), FontId::monospace(size), Color32::from_rgba_unmultiplied(255, 70, 70, 220));
             }
         }
     }
@@ -362,15 +369,11 @@ fn add_cross(app: &mut App, at: P2) {
         }
         break;
     }
-    let label = match sample.crosses.last() {
-        None => [0, 0],
-        Some(c) if sample.crosses.len() == 1 => [c.label[0] + 1, c.label[1]],
-        Some(c) => [c.label[0], c.label[1] + 1],
-    };
+    // no numbers of our own: the operator signs the cross (X, Y) in the Lattice panel
     let s = app.proj.sample_mut();
-    s.crosses.push(crate::project::Cross { at: p, label });
+    s.crosses.push(crate::project::Cross { at: p, label: None });
     let _ = s.refit();
-    app.message = if refined { format!("cross {},{} at ({:.2}, {:.2}) um, centre found on the map", label[0], label[1], p[0], p[1]) } else { format!("cross {},{} where clicked (no clear cross on a map there)", label[0], label[1]) };
+    app.message = if refined { format!("cross at ({:.2}, {:.2}) um, centre found on the map: sign its X, Y on the right", p[0], p[1]) } else { "cross where clicked (no clear cross on a map there): sign its X, Y on the right".into() };
     app.changed();
 }
 

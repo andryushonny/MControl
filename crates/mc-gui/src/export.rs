@@ -23,20 +23,46 @@ pub struct Square {
     pub px: [usize; 2],
 }
 
-/// Which way the lattice axes point on the screen (+1 / -1), so the drawing looks like the screen.
-#[derive(Clone, Copy)]
+/// How the lattice stands on the screen, so the drawing looks like the screen: which lattice axis is the
+/// horizontal one (`swap`: the second, b), and whether it runs right (sx = +1) and the other down (sy = +1).
+#[derive(Clone, Copy, Debug)]
 pub struct Orient {
     pub sx: f64,
     pub sy: f64,
+    pub swap: bool,
 }
 
 impl Orient {
-    /// The drawing looks like the screen: a lattice axis that points right on the screen goes right in the
-    /// drawing, one that points down goes down (the view may be mirrored and turned).
+    /// From the view (mirroring and turn included).
     pub fn of(l: &Lattice, flip_x: bool, flip_y: bool, turn: f64) -> Orient {
         let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: eframe::egui::Rect::ZERO, flip_x, flip_y, turn };
         let (a, b) = (v.dir_to_screen(l.a), v.dir_to_screen(l.b));
-        Orient { sx: if a[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if b[1] >= 0.0 { 1.0 } else { -1.0 } }
+        let swap = b[0].abs() > a[0].abs();
+        let (h, vert) = if swap { (b, a) } else { (a, b) };
+        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap }
+    }
+
+    /// (horizontal, vertical) pitch, um
+    pub fn pitch(&self, l: &Lattice) -> (f64, f64) {
+        let p = l.pitch();
+        if self.swap { (p[1], p[0]) } else { (p[0], p[1]) }
+    }
+
+    /// A point of a cell given as parts of its width (left to right) and height (top to bottom), as lattice
+    /// fractions (along a, along b).
+    pub fn lat(&self, fx: f64, fy: f64) -> (f64, f64) {
+        let u = if self.sx > 0.0 { fx } else { 1.0 - fx };
+        let v = if self.sy > 0.0 { fy } else { 1.0 - fy };
+        if self.swap { (v, u) } else { (u, v) }
+    }
+
+    /// The numbers of a cell: those of the cross at its top left corner (as the screen shows it), so the
+    /// number written in the corner is the cross's.
+    pub fn top_left(&self, c: [i32; 2]) -> [i32; 2] {
+        let (u0, v0) = if self.swap { (c[1], c[0]) } else { (c[0], c[1]) };
+        let u = if self.sx > 0.0 { u0 } else { u0 + 1 };
+        let v = if self.sy > 0.0 { v0 } else { v0 + 1 };
+        if self.swap { [v, u] } else { [u, v] }
     }
 }
 
@@ -57,8 +83,8 @@ pub fn cells_in(l: &Lattice, r: &Rect) -> Vec<[i32; 2]> {
 /// Cut the squares of one source into `dir` (one PNG per square). `um_per_px`: picture resolution.
 pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, progress: &mut dyn FnMut(usize, usize)) -> Result<Vec<Square>, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let p = l.pitch();
-    let (nx, ny) = ((p[0] / um_per_px).round().max(1.0) as usize, (p[1] / um_per_px).round().max(1.0) as usize);
+    let (ph, pv) = o.pitch(l);
+    let (nx, ny) = ((ph / um_per_px).round().max(1.0) as usize, (pv / um_per_px).round().max(1.0) as usize);
     let inv = src.to_stage.inverse();
     let cells = cells_in(l, &src.rect);
     let mut out = vec![];
@@ -71,8 +97,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
                 // the square in screen order: p to the right, q down
                 let fx = (pp as f64 + 0.5) / nx as f64;
                 let fy = (q as f64 + 0.5) / ny as f64;
-                let fi = if o.sx > 0.0 { fx } else { 1.0 - fx };
-                let fj = if o.sy > 0.0 { fy } else { 1.0 - fy };
+                let (fi, fj) = o.lat(fx, fy);
                 let s = l.at(cell[0] as f64 + fi, cell[1] as f64 + fj);
                 let px = if src.rect.contains(s) {
                     let c = inv.apply(s);
@@ -93,7 +118,8 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
         if filled == 0 {
             continue;
         }
-        let file = dir.join(format!("{}_{}.png", cell[0], cell[1]));
+        let name = o.top_left(*cell);
+        let file = dir.join(format!("{}_{}.png", name[0], name[1]));
         pixels::write_png_rgba(&file, nx, ny, &rgba)?;
         out.push(Square { cell: *cell, file, px: [nx, ny] });
     }
@@ -102,8 +128,9 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
 
 /// Lattice point (fractional i, j) -> drawing coordinates (um), screen-like: x right, y up.
 fn cad(l: &Lattice, o: Orient, i: f64, j: f64) -> P2 {
-    let p = l.pitch();
-    [o.sx * i * p[0], -o.sy * j * p[1]]
+    let (ph, pv) = o.pitch(l);
+    let (u, v) = if o.swap { (j, i) } else { (i, j) };
+    [o.sx * u * ph, -o.sy * v * pv]
 }
 
 pub fn layer_name(s: &str) -> String {
@@ -127,7 +154,7 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
         d.layer(&layer_name(name), aci(*color), Some(*color));
         d.layer(&format!("{}_OUTLINE", layer_name(name)), aci(*color), Some(*color));
     }
-    let p = l.pitch();
+    let (ph, pv) = o.pitch(l);
     // bottom of the list first: later entities lie on top
     for (name, _, rect, squares) in layers.iter().rev() {
         let lay = layer_name(name);
@@ -138,7 +165,7 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
             let c = [cad(l, o, i, j), cad(l, o, i + 1.0, j), cad(l, o, i, j + 1.0), cad(l, o, i + 1.0, j + 1.0)];
             let x0 = c.iter().map(|q| q[0]).fold(f64::MAX, f64::min);
             let y0 = c.iter().map(|q| q[1]).fold(f64::MAX, f64::min);
-            d.image(&lay, &rel, sq.px, [x0, y0], p[0] / sq.px[0] as f64, p[1] / sq.px[1] as f64);
+            d.image(&lay, &rel, sq.px, [x0, y0], ph / sq.px[0] as f64, pv / sq.px[1] as f64);
         }
         // the selection's outline, in lattice place
         let corners: Vec<P2> = rect.corners().iter().map(|q| {
@@ -161,11 +188,16 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
         for j in j0..=j1 + 1 {
             d.line("LATTICE", cad(l, o, i0 as f64, j as f64), cad(l, o, (i1 + 1) as f64, j as f64));
         }
-        let h = p[0].min(p[1]) * 0.06;
+        let h = ph.min(pv) * 0.06;
         for c in &cells {
             // in the upper left corner of the square, as on the screen
-            let q = cad(l, o, c[0] as f64 + 0.5, c[1] as f64 + 0.5);
-            d.text("LATTICE_NUMBERS", [q[0] - p[0] * 0.45, q[1] + p[1] * 0.45 - h], h, &format!("{},{}", c[0], c[1]));
+            // in the top left corner of the square, the number of the cross there (as on the screen)
+            let (i, j) = (c[0] as f64, c[1] as f64);
+            let k = [cad(l, o, i, j), cad(l, o, i + 1.0, j), cad(l, o, i, j + 1.0), cad(l, o, i + 1.0, j + 1.0)];
+            let x0 = k.iter().map(|q| q[0]).fold(f64::MAX, f64::min);
+            let y1 = k.iter().map(|q| q[1]).fold(f64::MIN, f64::max);
+            let n = o.top_left(*c);
+            d.text("LATTICE_NUMBERS", [x0 + ph * 0.04, y1 - pv * 0.04 - h], h, &format!("{},{}", n[0], n[1]));
         }
     }
     d.save(path)
@@ -177,6 +209,24 @@ mod tests {
 
     /// A map turned by 3 degrees, a lattice turned by 2: each cut square must be exactly one lattice cell,
     /// which the map paints by the cell's numbers.
+    /// Crosses (15,16) and (15,17) side by side, X growing upwards on the screen: the square whose top left
+    /// corner is the cross (15,16) is numbered 15,16; the drawing is not turned.
+    #[test]
+    fn numbers_are_the_corner_crosses() {
+        let cross = |x: f64, y: f64, l: [i32; 2]| ([x, y], l);
+        // screen y grows down: X growing upwards means the stage point of (16,16) is above (15,16)
+        let l = Lattice::fit(&[cross(0.0, 0.0, [15, 16]), cross(100.0, 0.0, [15, 17])]).unwrap();
+        let o = Orient::of(&l, false, false, 0.0);
+        assert!(o.swap, "{o:?}");
+        // the cell between crosses (14..15, 16..17): its top left on the screen is the cross (15,16)
+        let c = l.coords([1.0, 1.0]); // a point just right of and below (15,16)
+        let cell = [c[0].floor() as i32, c[1].floor() as i32];
+        assert_eq!(o.top_left(cell), [15, 16], "cell {cell:?}, {o:?}");
+        // the drawing: the horizontal axis runs right, one pixel along it is the pitch along b
+        let (ph, pv) = o.pitch(&l);
+        assert!((ph - 100.0).abs() < 1e-9 && (pv - 100.0).abs() < 1e-9);
+    }
+
     #[test]
     fn squares_follow_the_lattice_exactly() {
         let (t, u) = (3f64.to_radians(), 2f64.to_radians());

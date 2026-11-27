@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4
+- Crosses get no numbers of their own: the operator signs each with its X, Y; the lattice and the numbers of all squares appear once 2 crosses are signed.
+- The number in a square's top left corner is that corner cross's own number (it was the square's lower index); the same in the DXF and the square files. A lattice whose X runs up or down the screen is drawn as on the screen.
+- Dragging the map pans it in every tool (Select and Lattice too), handy on a touchpad; a click still selects.
+- MStitch runs without a console window on Windows.
+
 ## 0.5.3
 - Objective changed on the microscope but not in the program: a notice in the corner of the map (the live picture changed while the stage stood still); when the picture matches another objective's scale, it names it and switches with one click.
 - A new selection goes to the top of the list; the list is the drawing priority, top drawn over the rest (map and DXF).

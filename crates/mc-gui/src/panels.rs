@@ -276,18 +276,43 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
 pub fn right(app: &mut App, ui: &mut egui::Ui) {
     egui::Panel::right("right").resizable(true).default_size(260.0).show(ui, |ui| {
         ui.heading("Lattice");
-        ui.label(RichText::new("Click crosses on a stitched map. Each cross gets the numbers (X, Y) of its lattice point; edit them to match the sample's numbering. 2 crosses: square lattice; 3 and more: fitted.").weak().size(11.5));
+        ui.label(RichText::new("Click crosses on a stitched map, then sign each with its numbers (X, Y) from the sample. Once 2 are signed, the lattice and the numbers of all squares follow; 3 and more: fitted.").weak().size(11.5));
         ui.separator();
         let mut remove = None;
         let mut changed = false;
-        let s = app.proj.sample_mut();
+        let mut bad = false;
+        let edits = &mut app.label_edits;
+        let s = app.proj.samples.get_mut(app.proj.active).unwrap();
         for (k, c) in s.crosses.iter_mut().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(format!("{}.", k + 1));
-                ui.label("X");
-                changed |= ui.add(egui::DragValue::new(&mut c.label[0]).speed(0.1)).changed();
-                ui.label("Y");
-                changed |= ui.add(egui::DragValue::new(&mut c.label[1]).speed(0.1)).changed();
+                match c.label.as_mut() {
+                    Some(l) => {
+                        ui.label("X");
+                        changed |= ui.add(egui::DragValue::new(&mut l[0]).speed(0.1)).changed();
+                        ui.label("Y");
+                        changed |= ui.add(egui::DragValue::new(&mut l[1]).speed(0.1)).changed();
+                    }
+                    None => {
+                        // not signed yet: type its numbers
+                        let buf = edits.entry(k).or_insert_with(|| (String::new(), String::new()));
+                        ui.label("X");
+                        ui.add(egui::TextEdit::singleline(&mut buf.0).desired_width(34.0));
+                        ui.label("Y");
+                        let r = ui.add(egui::TextEdit::singleline(&mut buf.1).desired_width(34.0));
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if ui.small_button("Sign").clicked() || enter {
+                            match (buf.0.trim().parse::<i32>(), buf.1.trim().parse::<i32>()) {
+                                (Ok(x), Ok(y)) => {
+                                    c.label = Some([x, y]);
+                                    edits.remove(&k);
+                                    changed = true;
+                                }
+                                _ => bad = true,
+                            }
+                        }
+                    }
+                }
                 if ui.small_button("Delete").clicked() {
                     remove = Some(k);
                 }
@@ -296,9 +321,13 @@ pub fn right(app: &mut App, ui: &mut egui::Ui) {
         }
         if let Some(k) = remove {
             s.crosses.remove(k);
+            edits.clear();
             changed = true;
         }
         let fit = if changed { Some(s.refit()) } else { None };
+        if bad {
+            app.message = "X and Y are whole numbers, e.g. 3 and 7".into();
+        }
         ui.separator();
         match &s.lattice {
             Some(l) => {
@@ -307,7 +336,7 @@ pub fn right(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(RichText::new(format!("pitch {:.3} x {:.3} um\nturn {:.4} deg\nfit rms {:.3} um", p[0], p[1], ang, l.rms_um)).monospace());
             }
             None => {
-                ui.label("No lattice yet: mark at least 2 crosses.");
+                ui.label("No lattice yet: sign at least 2 crosses with their X, Y.");
             }
         }
         if ui.button("Clear crosses").clicked() {
