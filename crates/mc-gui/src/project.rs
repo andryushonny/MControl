@@ -247,6 +247,12 @@ impl Project {
             p.samples.push(Sample::new("Sample 1"));
         }
         p.active = p.active.min(p.samples.len() - 1);
+        // the objectives' flat fields (a missing or broken file: none)
+        for o in p.objectives.iter_mut() {
+            if let Some(f) = &o.flat_file {
+                o.flat = crate::flat::Flat::load(&folder.join(f)).ok().map(std::sync::Arc::new);
+            }
+        }
         Ok(p)
     }
 

@@ -8,6 +8,7 @@ mod cross;
 mod drawing;
 mod export;
 mod focus;
+mod flat;
 mod geom;
 mod keys;
 mod link;
@@ -141,6 +142,8 @@ pub struct App {
     pub keys: keys::Keys,
     pub keys_open: bool,
     pub capturing: Option<keys::Act>,
+    /// a flat field being taken
+    pub flat_job: Option<Arc<Mutex<flat::Job>>>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -215,6 +218,7 @@ impl App {
             keys: keys::Keys::load(stored("keys")),
             keys_open: false,
             capturing: None,
+            flat_job: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -368,6 +372,44 @@ impl App {
                 self.message = format!("white balance R {:.3}  G 1  B {:.3} (from the live picture)", g[0], g[2]);
             }
             _ => self.message = "white balance: no live picture (or too dark)".into(),
+        }
+    }
+
+    /// Flat field for the objective on now: nine frames around here, half a field apart.
+    pub fn start_flat(&mut self) {
+        self.flat_job = Some(flat::start(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um));
+        self.message = "flat field: 9 frames around here...".into();
+    }
+
+    /// The objective's flat field off (its file stays).
+    pub fn flat_off(&mut self) {
+        let o = self.proj.optics_mut();
+        o.flat = None;
+        o.flat_file = None;
+        self.message = format!("flat field for {} off", self.proj.optics().objective);
+        self.changed();
+    }
+
+    fn poll_flat(&mut self) {
+        let Some(j) = &self.flat_job else { return };
+        let r = j.lock().unwrap().result.take();
+        let Some(r) = r else { return };
+        self.flat_job = None;
+        match r {
+            Ok(f) => {
+                let name = format!("flat/{}.flat", export::layer_name(&self.proj.optics().objective));
+                match f.save(&self.proj.path(&name)) {
+                    Ok(()) => {
+                        self.message = format!("flat field for {}: the edges get up to {:.0} % brighter; used for live pictures and scans from now on", self.proj.optics().objective, (1.0 / f.min as f64 - 1.0) * 100.0);
+                        let o = self.proj.optics_mut();
+                        o.flat = Some(Arc::new(f));
+                        o.flat_file = Some(name);
+                        self.changed();
+                    }
+                    Err(e) => self.message = format!("flat field: {e}"),
+                }
+            }
+            Err(e) => self.message = format!("flat field: {e}"),
         }
     }
 
@@ -809,6 +851,7 @@ impl eframe::App for App {
         self.load_maps();
         self.poll_jobs();
         self.poll_calibration();
+        self.poll_flat();
         if let Some(a) = self.link.state.lock().unwrap().alert.take() {
             self.message = a;
         }

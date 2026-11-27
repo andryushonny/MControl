@@ -165,8 +165,14 @@ fn run(link: &Link, job: &Mutex<Job>, rows: &[Vec<P2>], s: &Settings, dir: &Path
                     job.lock().unwrap().log.push(format!("focus at ({:.0}, {:.0}): z {:.1} um after {} frames, sharpness {:.2}", p[0], p[1], shot.z, shot.probes, shot.sharpness));
                 }
                 // the lens's distortion out before stitching: MStitch gets frames with straight lines
-                let sensor = shot.sensor.undistorted(&s.optics);
+                // the flat field first (it belongs to the sensor), then the distortion
+                let mut raw = shot.sensor;
+                let flat = s.optics.flat.as_ref().is_some_and(|fl| fl.apply(&mut raw));
+                let sensor = raw.undistorted(&s.optics);
                 let mut meta = f.meta.clone();
+                if flat {
+                    meta["flat_corrected"] = json!(true);
+                }
                 meta["row"] = json!(j);
                 meta["col"] = json!(i);
                 meta["plan_um"] = json!(p);
@@ -201,10 +207,21 @@ fn stitch(s: &Settings, mode: Mode, frames: &Path, map: &Path, job: &Mutex<Job>)
         Some(p) => serde_json::from_slice(&std::fs::read(p).map_err(|e| format!("{p}: {e}"))?).map_err(|e| format!("{p}: {e}"))?,
         None => s.optics.profile_json(),
     };
-    let profile = if s.optics.distorted() || s.optics.profile_path.is_none() {
+    // corrected by the flat field when scanned (frames of another size than the flat's are not)
+    let flat = s.optics.flat.as_ref().filter(|_| {
+        std::fs::read(frames.join("r000_c000.json")).ok().and_then(|d| serde_json::from_slice::<Value>(&d).ok()).is_some_and(|m| m["flat_corrected"] == json!(true))
+    });
+    let profile = if s.optics.distorted() || s.optics.profile_path.is_none() || flat.is_some() {
         let z = s.optics.zoom();
         prof["m"] = json!(s.optics.m.map(|v| v / z));
         prof["k"] = json!([0.0, 0.0]);
+        // the frames are corrected already: MStitch gets an even flat field, so it neither uses its own nor
+        // estimates one from the frames
+        if let Some(f) = flat {
+            crate::flat::Flat::write_ones(&frames.join("flat_ones.npy"), f.w, f.h)?;
+            prof["flat"] = json!("flat_ones.npy");
+            prof["flat_level"] = json!(2);
+        }
         let p = frames.join("profile.json");
         std::fs::write(&p, serde_json::to_vec_pretty(&prof).unwrap()).map_err(|e| e.to_string())?;
         p
@@ -463,7 +480,7 @@ mod e2e_lens {
         };
         println!("calibration: {fit:?}");
         {
-            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None };
+            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None, flat_file: None, flat: None };
             let ms = crate::calib::DEBUG.lock().unwrap().clone();
             let mut res: Vec<f64> = ms.iter().map(|m| {
                 let (a, b) = (truth.undistort(m.p0), truth.undistort(m.p1));

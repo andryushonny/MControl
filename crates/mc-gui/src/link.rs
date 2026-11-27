@@ -181,10 +181,14 @@ impl Link {
             let fps = self.state.lock().unwrap().live_fps.max(0.5);
             if last_decode.elapsed().as_secs_f64() >= 1.0 / fps {
                 last_decode = Instant::now();
-                if let Ok(sensor) = pixels::unpack(&f.meta, &f.data) {
+                if let Ok(mut sensor) = pixels::unpack(&f.meta, &f.data) {
                     let div = 2;
+                    let look = self.state.lock().unwrap().look.clone();
+                    if let Some(fl) = look.as_ref().and_then(|(o, _)| o.flat.as_ref()) {
+                        fl.apply(&mut sensor);
+                    }
                     let mut rgb = sensor.rgb(div);
-                    if let Some((o, wb)) = self.state.lock().unwrap().look.clone() {
+                    if let Some((o, wb)) = look {
                         rgb = rgb.undistorted(&o, 2.0 * div as f64);
                         rgb.balance(wb);
                     }

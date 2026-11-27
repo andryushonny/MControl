@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.6
+- *Calibrate, Flat field* (also in Settings): the frame darker to its edges (vignetting, uneven light) measured for the objective on now: 9 frames around the current spot, half a field apart; per Bayer plane the median of the frames (the sample's features fall out), smoothed by a polynomial of degree 4, mean 1. Kept per objective (project folder `flat/`); *Flat field off*.
+- With it, live pictures and scanned frames are divided by it on the raw sensor values (before the distortion is taken out); MStitch then gets an even flat field and does not estimate its own.
+
 ## 0.6.5
 - mc-server's banner: Control / Data / Web show an address the PC really has now (one of *Addresses*), not a stale one of a network it has left.
 

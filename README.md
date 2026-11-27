@@ -59,6 +59,8 @@ The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, came
 
 ![mc-operator](docs/img/operator.png)
 
+**Flat field** (Calibrate menu): the frame darker to its edges (vignetting) is measured on an even part of the substrate (9 frames, half a field apart) and divided out of live pictures and scans, per objective.
+
 **Keys** (top bar): a table of every action and its key; *Change* and press any key (Shift / Ctrl with it if wanted), *None*, *Default*; clashes are red; kept for next time.
 
 **Controls** (top bar): turn and mirror the picture on the screen to your liking; teach the arrows by watching the stage (it moves a little along X, then Y, and you click where you saw it go), so each arrow moves the stage the way it points for you; find the camera's orientation.

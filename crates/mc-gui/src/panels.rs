@@ -67,6 +67,19 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                     app.auto_white();
                     ui.close();
                 }
+                ui.separator();
+                let flat_can = app.flat_job.is_none() && app.calib.is_none() && app.link.stage_pos().is_some();
+                if ui.add_enabled(flat_can, egui::Button::new("Flat field"))
+                    .on_hover_text("the frame darker to its edges (vignetting, uneven light): 9 frames around here, half a field apart, best on an even, clean part of the substrate (or a little out of focus), not saturated. Then live pictures and scans with this objective are corrected.")
+                    .clicked()
+                {
+                    app.start_flat();
+                    ui.close();
+                }
+                if app.proj.optics().flat.is_some() && ui.button("Flat field off").on_hover_text("no correction for this objective").clicked() {
+                    app.flat_off();
+                    ui.close();
+                }
             });
             if ui.button(with_key("Follow", app.keys.text(crate::keys::Act::Follow))).clicked() {
                 app.follow = true;
@@ -569,6 +582,21 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
+            ui.label("Flat field");
+            ui.horizontal(|ui| {
+                match &app.proj.optics().flat {
+                    Some(f) => ui.label(format!("on: edges up to {:.0} % darker, corrected", (1.0 - f.min as f64) * 100.0)),
+                    None => ui.label(RichText::new("off").weak()),
+                };
+                let can = app.flat_job.is_none() && app.calib.is_none() && app.link.stage_pos().is_some();
+                if ui.add_enabled(can, egui::Button::new("Measure here")).on_hover_text("9 frames around here, half a field apart, on an even part of the substrate, not saturated").clicked() {
+                    app.start_flat();
+                }
+                if app.proj.optics().flat.is_some() && ui.button("Off").clicked() {
+                    app.flat_off();
+                }
+            });
+            ui.end_row();
             ui.label("White balance R G B");
             ui.horizontal(|ui| {
                 let mut g = app.proj.wb;
@@ -710,6 +738,12 @@ pub fn status(app: &mut App, ui: &mut egui::Ui) {
                     }
                     _ => {}
                 }
+                ui.separator();
+            }
+            if let Some(j) = &app.flat_job {
+                let j = j.lock().unwrap();
+                ui.label("flat field");
+                blocks(ui, j.done as f32 / j.total.max(1) as f32, 120.0, &format!("{}/{}", j.done, j.total));
                 ui.separator();
             }
             if let Some(c) = &app.calib {
