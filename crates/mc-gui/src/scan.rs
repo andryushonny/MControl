@@ -245,12 +245,19 @@ pub fn check(map: &Path) -> Option<String> {
     let mut bad = vec![];
     for r in &rows {
         let off = ((num(r, dx) - mx).powi(2) + (num(r, dy) - my).powi(2)).sqrt();
-        let flagged = rs.and_then(|i| r.get(i)).is_some_and(|v| !v.trim().is_empty());
+        // MStitch writes None (or nothing) when a frame needs no second shot
+        let flagged = rs.and_then(|i| r.get(i)).is_some_and(|v| !matches!(v.trim(), "" | "None" | "False" | "false" | "0" | "{}" | "[]"));
         if off > 2.0 || flagged {
-            bad.push(format!("({:.0}, {:.0}) um: {off:.1} um off", num(r, ix), num(r, iy)));
+            bad.push((off, format!("({:.0}, {:.0}) um {off:.1} um off", num(r, ix), num(r, iy))));
         }
     }
-    (!bad.is_empty()).then(|| format!("check the stitch, {} of {} frames placed apart from the rest: {}", bad.len(), rows.len(), bad.join("; ")))
+    if bad.is_empty() {
+        return None;
+    }
+    // short: how many, and the worst three
+    bad.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let worst: Vec<String> = bad.iter().take(3).map(|b| b.1.clone()).collect();
+    Some(format!("check the stitch: {} of {} frames apart from the rest, worst {}", bad.len(), rows.len(), worst.join("; ")))
 }
 
 /// A stitched map from MStitch's folder: the picture and its pixel -> stage mapping.
@@ -280,6 +287,24 @@ pub fn load_map(dir: &Path) -> Result<(Rgb, Affine, f64), String> {
     }
     let umpp = m["um_per_px"].as_f64().unwrap_or(to_stage.scale());
     Ok((img, to_stage, umpp))
+}
+
+#[cfg(test)]
+mod check_tests {
+    #[test]
+    fn only_frames_really_apart_are_reported() {
+        let dir = std::env::temp_dir().join(format!("mc-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut csv = "index,row,col,x_um,y_um,x_px,y_px,dx_px,dy_px,dx_um,dy_um,pairs,best_ncc,reshoot\n".to_string();
+        for k in 0..300 {
+            let dx = if k == 7 || k == 8 { 4.7 } else { 0.1 };
+            csv += &format!("{k},-1,-1,{},{},0,0,0,0,{dx},0.0,3,0.9,None\n", k * 10, 0);
+        }
+        std::fs::write(dir.join("poses.csv"), csv).unwrap();
+        let w = super::check(&dir).unwrap();
+        assert!(w.starts_with("check the stitch: 2 of 300"), "{w}");
+        assert!(w.len() < 200, "{w}");
+    }
 }
 
 #[cfg(test)]

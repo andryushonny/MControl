@@ -163,8 +163,17 @@ pub struct Project {
     /// white balance: gains for red, green, blue (live, maps, exported squares; raw frames stay raw)
     #[serde(default = "no_balance")]
     pub wb: [f64; 3],
+    /// light level used when the light is switched on (1..5), laser power when the laser is (mW)
+    #[serde(default = "light_on")]
+    pub light_level: u32,
+    #[serde(default)]
+    pub laser_mw: u32,
     #[serde(skip)]
     pub folder: PathBuf,
+}
+
+fn light_on() -> u32 {
+    3
 }
 
 fn no_balance() -> [f64; 3] {
@@ -192,6 +201,8 @@ impl Project {
             scan: ScanSettings::default(),
             next_id: 1,
             wb: no_balance(),
+            light_level: light_on(),
+            laser_mw: 0,
             folder: folder.to_path_buf(),
         }
     }

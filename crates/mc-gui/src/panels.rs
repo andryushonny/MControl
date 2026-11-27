@@ -15,7 +15,7 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                     app.anchor = None;
                 }
             }
-            if ui.memory(|m| m.focused().is_none()) {
+            if !ui.ctx().text_edit_focused() {
                 for (k, t) in [(egui::Key::E, Tool::Explore), (egui::Key::S, Tool::Select), (egui::Key::L, Tool::Lattice)] {
                     if ui.input(|i| i.key_pressed(k)) {
                         app.tool = t;
@@ -29,6 +29,15 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             }
             if ui.button(RichText::new("Stop (Space)").color(Color32::from_rgb(255, 120, 100))).on_hover_text("stops the stage and the scan; the queue pauses").clicked() {
                 app.stop_all();
+            }
+            let (light, laser_mw, _) = app.link.lamps();
+            let lt = if light > 0 { RichText::new(format!("Light {light}")).color(Color32::from_rgb(250, 220, 120)) } else { RichText::new("Light off") };
+            if ui.button(lt).on_hover_text("F2: on / off (level in Settings)").clicked() {
+                app.toggle_light();
+            }
+            let lz = if laser_mw > 0 { RichText::new(format!("LASER {laser_mw} mW")).strong().color(Color32::from_rgb(255, 70, 70)) } else { RichText::new("Laser off") };
+            if ui.button(lz).on_hover_text("Shift+F3: on, F3 or Space: off (power in Settings)").clicked() {
+                app.laser(laser_mw == 0);
             }
             if ui.button("Follow (F)").clicked() {
                 app.follow = true;
@@ -81,7 +90,7 @@ pub fn bottom(app: &mut App, ui: &mut egui::Ui) {
             let e = e.lock().unwrap();
             ui.horizontal(|ui| match &e.result {
                 None => {
-                    ui.add(egui::ProgressBar::new(e.done as f32 / e.total.max(1) as f32).desired_width(260.0).text(e.stage.clone()));
+                    blocks(ui, e.done as f32 / e.total.max(1) as f32, 180.0, &e.stage);
                 }
                 Some(Ok(p)) => {
                     ui.label(RichText::new(format!("Drawing written: {}", p.display())).color(Color32::from_rgb(90, 210, 120)));
@@ -92,7 +101,7 @@ pub fn bottom(app: &mut App, ui: &mut egui::Ui) {
             });
         }
         if !app.message.is_empty() {
-            ui.label(RichText::new(&app.message).strong());
+            ui.add(egui::Label::new(RichText::new(&app.message).strong()).truncate()).on_hover_text(&app.message);
         }
         ui.separator();
         egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
@@ -182,7 +191,9 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                         ui.label(RichText::new(format!("aligned: moved {:+.2}, {:+.2} um", d[0] - c[0], d[1] - c[1])).size(11.0).color(Color32::from_rgb(120, 200, 140)));
                     }
                     if let Some(w) = s.best_scan().map(|sc| sc.note.clone()).filter(|n| !n.is_empty()) {
-                        ui.label(RichText::new(w).size(11.0).color(Color32::from_rgb(240, 170, 60)));
+                        // one line; the whole note on hover
+                        let short: String = if w.chars().count() > 70 { w.chars().take(70).collect::<String>() + "..." } else { w.clone() };
+                        ui.add(egui::Label::new(RichText::new(short).size(11.0).color(Color32::from_rgb(240, 170, 60))).truncate()).on_hover_text(w);
                     }
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Objective").size(11.0));
@@ -377,6 +388,46 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.label("um per pixel");
             ui.label(format!("{:.4}", app.proj.optics().um_per_px()));
             ui.end_row();
+            ui.label("Light (F2)");
+            ui.horizontal(|ui| {
+                let (light, laser_mw, laser_max) = app.link.lamps();
+                let mut on = light > 0;
+                if ui.checkbox(&mut on, "on").changed() {
+                    app.toggle_light();
+                }
+                ui.label("level");
+                let mut lv = app.proj.light_level;
+                if ui.add(egui::Slider::new(&mut lv, 1..=5)).changed() {
+                    app.proj.light_level = lv;
+                    changed = true;
+                    if light > 0 {
+                        app.link.send(json!({"cmd": "light", "level": lv}));
+                    }
+                }
+                let _ = (laser_mw, laser_max);
+            });
+            ui.end_row();
+            ui.label("Laser (Shift+F3 on, F3 off)");
+            ui.horizontal(|ui| {
+                let (_, laser_mw, laser_max) = app.link.lamps();
+                let mut mw = app.proj.laser_mw;
+                let top = if laser_max > 0 { laser_max } else { 100 };
+                if ui.add(egui::DragValue::new(&mut mw).range(0..=top).suffix(" mW")).changed() {
+                    app.proj.laser_mw = mw;
+                    changed = true;
+                }
+                if laser_max > 0 {
+                    ui.label(RichText::new(format!("max {laser_max}")).weak());
+                }
+                if laser_mw > 0 {
+                    if ui.button(RichText::new(format!("Switch off ({laser_mw} mW on)")).color(Color32::from_rgb(255, 90, 90))).clicked() {
+                        app.laser(false);
+                    }
+                } else if ui.button("Switch on").on_hover_text("needs mc-server started with --allow-laser").clicked() {
+                    app.laser(true);
+                }
+            });
+            ui.end_row();
             ui.label("Camera exposure, ms");
             camera(app, ui);
             ui.end_row();
@@ -484,7 +535,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
         });
         ui.separator();
-        ui.label(RichText::new("Keys: arrows move the picture that way on the screen (Shift: 1/10, Ctrl: a whole field), Space stops, F follows the stage, Home shows the whole sample, E/S/L tools, Esc cancels a selection. Mouse: drag pans, wheel zooms, double click moves the stage there.").weak().size(11.5));
+        ui.label(RichText::new("Keys: arrows move the picture that way on the screen (Shift: 1/10, Ctrl: a whole field), Space stops (and switches the laser off), F2 light, Shift+F3 laser on / F3 off, F follows the stage, Home shows the whole sample, E/S/L tools, Esc cancels a selection. Mouse: drag pans, wheel zooms, double click moves the stage there.").weak().size(11.5));
     });
     app.settings_open = open;
     if changed {
@@ -513,6 +564,11 @@ pub fn status(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.separator();
             ui.label(format!("Objective {}", app.proj.optics().objective));
+            let (_, laser_mw, _) = app.link.lamps();
+            if laser_mw > 0 {
+                ui.separator();
+                ui.label(RichText::new(format!("LASER ON {laser_mw} mW")).strong().color(Color32::WHITE).background_color(Color32::from_rgb(200, 30, 30)));
+            }
             ui.separator();
             if let Some(o) = app.wait_objective.clone() {
                 ui.label(RichText::new(format!("Queue waits: put the {o} objective on")).strong().color(Color32::from_rgb(250, 190, 60)));
@@ -530,12 +586,14 @@ pub fn status(app: &mut App, ui: &mut egui::Ui) {
                         let f = j.done as f32 / j.total.max(1) as f32;
                         let left = (j.total - j.done) as f64 * app.sec_per_frame;
                         ui.label(format!("{} scan, {}", j.mode.name(), name(j.selection)));
-                        ui.add(egui::ProgressBar::new(f).desired_width(220.0).text(format!("{}/{} frames, {} left", j.done, j.total, mmss(left))));
+                        blocks(ui, f, 180.0, &format!("{}/{} frames, {} left", j.done, j.total, mmss(left)));
                     }
                     crate::scan::Phase::Stitching => {
                         let t = j.stitch_at.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
                         ui.label(format!("stitching {}", name(j.selection)));
-                        ui.add(egui::ProgressBar::new(((t / 2.0).fract()) as f32).desired_width(110.0).animate(true).text(mmss(t)));
+                        // MStitch's command line tells no progress: the time it took per frame before
+                        let expect = (j.done.max(1) as f64 * app.stitch_per_frame).max(1.0);
+                        blocks(ui, (t / expect).min(0.95) as f32, 120.0, &mmss(t));
                     }
                     _ => {}
                 }
@@ -544,7 +602,7 @@ pub fn status(app: &mut App, ui: &mut egui::Ui) {
             if let Some(c) = &app.calib {
                 let c = c.lock().unwrap();
                 ui.label("calibrating optics");
-                ui.add(egui::ProgressBar::new(c.done as f32 / c.total.max(1) as f32).desired_width(160.0).text(format!("{} {}/{}", c.phase, c.done, c.total)));
+                blocks(ui, c.done as f32 / c.total.max(1) as f32, 120.0, &format!("{} {}/{}", c.phase, c.done, c.total));
                 ui.separator();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -672,4 +730,22 @@ fn camera(app: &mut App, ui: &mut egui::Ui) {
     })
     .response
     .on_disabled_hover_text(if scanning { "not while scanning: the frames of one map must have the same exposure" } else { "not connected" });
+}
+
+/// A plain green progress bar of blocks (as in old games): `frac` 0..1, the text beside it.
+pub fn blocks(ui: &mut egui::Ui, frac: f32, width: f32, text: &str) {
+    let h = 16.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, Color32::from_rgb(20, 24, 20));
+    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 110, 70)), egui::StrokeKind::Inside);
+    let (bw, gap) = (7.0, 2.0);
+    let inner = rect.shrink(3.0);
+    let n = ((inner.width() + gap) / (bw + gap)).floor().max(1.0) as usize;
+    let filled = (frac.clamp(0.0, 1.0) * n as f32).round() as usize;
+    for k in 0..filled {
+        let x = inner.left() + k as f32 * (bw + gap);
+        p.rect_filled(egui::Rect::from_min_size(egui::pos2(x, inner.top()), egui::vec2(bw, inner.height())), 0.0, Color32::from_rgb(60, 200, 60));
+    }
+    ui.label(RichText::new(text).monospace());
 }

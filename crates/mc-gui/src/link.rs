@@ -56,6 +56,8 @@ pub struct State {
     pub frames_in: u64,
     /// how live pictures are made to look: the optics (distortion taken out) and the white balance
     pub look: Option<(crate::geom::Optics, [f64; 3])>,
+    /// a command from the UI that failed, to show where the operator looks
+    pub alert: Option<String>,
 }
 
 pub struct Link {
@@ -219,6 +221,7 @@ impl Link {
         let me = self.clone();
         std::thread::spawn(move || {
             if let Err(e) = me.call(v.clone()) {
+                me.state.lock().unwrap().alert = Some(format!("{}: {e}", v["cmd"].as_str().unwrap_or("?")));
                 me.note(format!("{}: {e}", v["cmd"].as_str().unwrap_or("?")));
             }
         });
@@ -251,6 +254,14 @@ impl Link {
     pub fn set_live(self: &Arc<Self>, on: bool) {
         *self.want_live.lock().unwrap() = on;
         self.send(json!({"cmd": "stream", "on": on}));
+    }
+
+    /// Light level (0..5), laser mW and the laser's maximum, as the controller reports them.
+    pub fn lamps(&self) -> (u32, u32, u32) {
+        let s = self.state.lock().unwrap();
+        let st = &s.telemetry["stage"];
+        let n = |k: &str| st[k].as_u64().unwrap_or(0) as u32;
+        (n("light"), n("laser_mw"), n("laser_max_mw"))
     }
 
     pub fn stage_pos(&self) -> Option<[f64; 3]> {

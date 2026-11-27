@@ -98,6 +98,8 @@ pub struct App {
     pub wait_objective: Option<String>,
     /// seconds per frame, learned from the scans done (for the time left)
     pub sec_per_frame: f64,
+    /// stitching seconds per frame, learned (for its progress bar)
+    pub stitch_per_frame: f64,
     pub queue_open: bool,
     /// camera settings being edited (exposure ms, gain); None: show what the camera has
     pub cam_edit: Option<(f64, f64)>,
@@ -153,6 +155,7 @@ impl App {
             paused: false,
             wait_objective: None,
             sec_per_frame: 0.6,
+            stitch_per_frame: 0.1,
             queue_open: false,
             cam_edit: None,
             auto_exposure: false,
@@ -319,6 +322,11 @@ impl App {
                 self.thumbs.push(thumb_picture(&self.proj.optics(), p, rgb, div, self.proj.optics().zoom(), self.thumbs.len()));
             }
             if matches!(jb.phase, scan::Phase::Done | scan::Phase::Failed(_) | scan::Phase::Stopped) {
+                if let (scan::Phase::Done, Some(t)) = (&jb.phase, jb.stitch_at) {
+                    if jb.done > 0 {
+                        self.stitch_per_frame = 0.6 * self.stitch_per_frame + 0.4 * t.elapsed().as_secs_f64() / jb.done as f64;
+                    }
+                }
                 finished.push(k);
             }
         }
@@ -450,9 +458,35 @@ impl App {
         self.group_queue();
     }
 
+    /// Light on (at the project's level) or off.
+    pub fn toggle_light(&mut self) {
+        let (light, _, _) = self.link.lamps();
+        let level = if light > 0 { 0 } else { self.proj.light_level.clamp(1, 5) };
+        self.link.send(serde_json::json!({"cmd": "light", "level": level}));
+    }
+
+    /// Laser on at the project's power, or off. Off always works; on needs a power set and a server started
+    /// with --allow-laser.
+    pub fn laser(&mut self, on: bool) {
+        if !on {
+            self.link.send(serde_json::json!({"cmd": "laser", "mw": 0}));
+            return;
+        }
+        let (_, _, max) = self.link.lamps();
+        if self.proj.laser_mw == 0 {
+            self.message = "laser: set its power in Settings first".into();
+            return;
+        }
+        let mw = if max > 0 { self.proj.laser_mw.min(max) } else { self.proj.laser_mw };
+        self.link.send(serde_json::json!({"cmd": "laser", "mw": mw}));
+    }
+
     /// Stop: the stage, the scan running (its frames so far are kept), and the queue pauses.
     pub fn stop_all(&mut self) {
         self.link.send(serde_json::json!({"cmd": "stop"}));
+        if self.link.lamps().1 > 0 {
+            self.laser(false);
+        }
         for j in &self.jobs {
             j.lock().unwrap().stop = true;
         }
@@ -550,6 +584,9 @@ impl eframe::App for App {
         self.load_maps();
         self.poll_jobs();
         self.poll_calibration();
+        if let Some(a) = self.link.state.lock().unwrap().alert.take() {
+            self.message = a;
+        }
         // a new connection: the camera gets this objective's exposure again
         let connected = self.link.state.lock().unwrap().connected;
         if connected && !self.cam_applied {

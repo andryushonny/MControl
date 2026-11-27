@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+- Light and laser: F2 light on/off, Shift+F3 laser on, F3 or Space off; buttons in the top bar, level and power in Settings; LASER ON in red in the status bar; Stop also switches the laser off.
+- Keyboard shortcuts work after a click on the map (the map no longer keeps the keyboard).
+- Stitch check: frames MStitch marks as fine are no longer reported; the warning is one short line (count and the worst three).
+- Progress bars: plain green blocks; stitching shows the time so far against what it took per frame before.
+
 ## 0.5.1
 - mc-operator, Settings: camera exposure, gain and auto exposure (shown as the camera has them; locked while scanning).
 - Exposure and gain are remembered per objective and given to the camera again when that objective is put on or the program reconnects.

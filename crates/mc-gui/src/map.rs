@@ -11,7 +11,11 @@ use std::sync::Arc;
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
     let rect = resp.rect;
-    if ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(Key::Home)) {
+    // the map takes clicks, not the keyboard: keys stay shortcuts (arrows would otherwise move focus around)
+    if resp.has_focus() {
+        resp.surrender_focus();
+    }
+    if !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(Key::Home)) {
         app.fit = true;
     }
     let turn = app.proj.sample().turn_deg.to_radians();
@@ -53,7 +57,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     view.center = app.center;
-    if ui.memory(|m| m.focused().is_none()) {
+    if !ui.ctx().text_edit_focused() {
         keys(app, ui, stage, &view);
     }
 
@@ -211,6 +215,13 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     }
     if ui.input(|i| i.key_pressed(Key::Space)) {
         app.stop_all();
+    }
+    // F2: light on/off; Shift+F3: laser on, F3: laser off (on needs Shift, so it is never switched on by mistake)
+    if ui.input(|i| i.key_pressed(Key::F2)) {
+        app.toggle_light();
+    }
+    if ui.input(|i| i.key_pressed(Key::F3)) {
+        app.laser(shift && app.link.lamps().1 == 0);
     }
     if ui.input(|i| i.key_pressed(Key::F)) {
         app.follow = true;
