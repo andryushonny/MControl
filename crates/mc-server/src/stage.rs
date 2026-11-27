@@ -438,7 +438,7 @@ impl Worker {
             }
             let max = self.shared.lock().unwrap().laser_max;
             if max == 0 || mw > max {
-                return Err(McError::new("E101", format!("laser {mw} mW, the maximum is {max} mW")));
+                return Err(McError::new("E309", format!("{mw} mW, the maximum is {max} mW")));
             }
         }
         self.ctl.cmd(C::LASER, &(mw as u16).to_be_bytes(), 1000)?;

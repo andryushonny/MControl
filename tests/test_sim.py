@@ -3,6 +3,7 @@ import os, subprocess, time, tempfile
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["MCONTROL_CONFIG"] = os.path.join(tempfile.mkdtemp(), "mcontrol.json")   # leave the user's memory alone
 from mcontrol import Microscope, Viewer, McError
 
 EXE = os.path.join(ROOT, "target", "release", "mc-server" + (".exe" if os.name == "nt" else ""))
@@ -14,22 +15,26 @@ def start(*extra):
     p = subprocess.Popen([EXE, "--sim", "--no-color", "--dead-ms", "1500", *extra],
                          stdout=log, stderr=subprocess.STDOUT, cwd=tempfile.gettempdir())
     p.logfile = log.name
-    for _ in range(50):
-        try:
-            Viewer(HOST).close()
+    for _ in range(100):                                   # the address table is printed once it listens
+        if "Ctrl+C" in open(log.name, errors="replace").read():
             return p
-        except McError:
-            time.sleep(0.1)
+        if p.poll() is not None:
+            return p                                       # refused to start: the test reads the log
+        time.sleep(0.05)
     p.kill()
     raise RuntimeError("server did not start")
+
+
+def stop(p):
+    p.kill()
+    p.wait()
 
 
 @pytest.fixture
 def server():
     p = start("--no-guard")
     yield p
-    p.kill()
-    p.wait()
+    stop(p)
 
 
 def test_snap_and_metadata(server):
@@ -68,16 +73,30 @@ def test_roles(server):
 def test_many_viewers(server):
     vs = [Viewer(HOST, name=f"v{i}") for i in range(8)]
     with Microscope(HOST) as m:
-        t = time.time()
-        n = 0
-        for f in m.frames():
-            n += 1
-            if time.time() - t > 2:
-                break
+        n = sum(1 for _ in m.live(seconds=2))
         assert n / 2 > 15                                  # raw stream keeps up while 8 viewers watch
+        assert not m.stream.on                             # switched off after the loop
     for v in vs:
         assert v.latest().is_preview
         v.close()
+
+
+def test_viewers_see_what_the_operator_does(server):
+    from mcontrol import describe
+    with Viewer(HOST) as v, Microscope(HOST, name="op") as m:
+        seen = []
+        v.on_event(seen.append)
+        m.light.level = 2
+        m.snap(x=50)
+        with pytest.raises(McError):
+            m.laser.mw = 5
+        time.sleep(0.3)
+        cmds = [(e["cmd"], e["state"]) for e in seen if e["event"] == "command"]
+        assert ("light", "started") in cmds and ("light", "done") in cmds
+        assert ("snap", "done") in cmds and ("laser", "failed") in cmds
+        snap = next(e for e in seen if e["event"] == "command" and e["cmd"] == "snap" and e["state"] == "done")
+        assert snap["by"] == "op" and snap["result"]["meta"]["xyz_um"][0] > 40
+        assert "op: snap x=50.0" in describe(snap)
 
 
 def test_silent_operator_loses_lease(server):
@@ -122,3 +141,62 @@ def test_guard_makes_it_safe():
     os.kill(p.pid, 9)
     out = open(p.logfile, errors="replace").read()
     assert "Safe state set" in out
+
+
+# ---------------------------------------------------------------- network and access
+
+def test_token():
+    p = start("--no-guard", "--token", "s3cret")
+    try:
+        with pytest.raises(McError) as e:
+            Viewer(HOST, token="wrong")
+        assert e.value.code == "E112"
+        with Microscope(HOST, token="s3cret") as m:
+            assert m.snap().raw().size
+    finally:
+        stop(p)
+
+
+def test_operators_and_allow():
+    p = start("--no-guard", "--operators", "10.0.0.0/8")    # this PC (127.0.0.1) may only watch
+    try:
+        with pytest.raises(McError) as e:
+            Microscope(HOST)
+        assert e.value.code == "E113"
+        Viewer(HOST).close()
+    finally:
+        stop(p)
+    p = start("--no-guard", "--allow", "10.0.0.0/8")
+    try:
+        with pytest.raises(McError) as e:
+            Viewer(HOST)
+        assert e.value.code == "E111"
+    finally:
+        stop(p)
+
+
+def test_open_without_token_refuses_to_start():
+    p = start("--no-guard", "--allow", "any")
+    assert p.wait(5) == 2 and "E121" in open(p.logfile).read()
+
+
+def test_busy_port_moves_and_discovery_finds_it():
+    import socket
+    busy = socket.socket()
+    if os.name != "nt":                                    # an earlier server's port may sit in TIME_WAIT
+        busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    busy.bind(("0.0.0.0", 5160))
+    busy.listen()
+    p = start("--no-guard")
+    try:
+        assert "Port 5160 busy" in open(p.logfile).read()
+        with Microscope() as m:                            # found by discovery, on the moved port
+            assert m.snap().seq > 0
+    finally:
+        stop(p)
+        busy.close()
+
+
+def test_readme_lists_every_error():
+    table = subprocess.run([EXE, "errors"], capture_output=True, text=True).stdout
+    assert table.strip() in open(os.path.join(ROOT, "README.md"), encoding="utf-8").read().replace("\r", "")

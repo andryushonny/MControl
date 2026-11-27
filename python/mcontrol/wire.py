@@ -1,5 +1,6 @@
 """Wire format shared with the Rust side: [u32 LE len][u8 kind][payload], len counts kind + payload."""
 import json
+import os
 import socket
 import struct
 
@@ -50,7 +51,7 @@ class Wire:
                 pass
 
 
-def discover(wait: float = 0.7) -> list:
+def discover(wait: float = 0.7, port: int = None) -> list:
     """Servers on the LAN: [(host, control_port, answer dict)], LAN addresses before loopback."""
     import time
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -58,7 +59,7 @@ def discover(wait: float = 0.7) -> list:
     s.settimeout(0.1)
     for t in ("255.255.255.255", "127.0.0.1"):
         try:
-            s.sendto(b"MCONTROL?", (t, DISCOVERY_PORT))
+            s.sendto(b"MCONTROL?", (t, port or int(os.environ.get("MCONTROL_DISCOVERY_PORT", DISCOVERY_PORT))))
         except OSError:
             pass
     out, end = [], time.monotonic() + wait

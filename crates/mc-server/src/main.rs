@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod log;
+mod access;
 mod camera;
 mod controller;
 mod frames;
@@ -27,8 +28,19 @@ USAGE: mc-server [options]
   --sim             simulated stage and camera (no hardware)
   --sim-size WxH    simulated camera size (default 1296x972)
   --name NAME       name shown to clients (default: computer name)
-  --control-port N  control TCP port (default 5160)
-  --data-port N     data TCP port (default 5161)
+NETWORK (local network only unless told otherwise)
+  --bind IP         listen on this address only, e.g. the PC's own LAN or VPN address (default: all)
+  --control-port N  control TCP port (default 5160; if busy, the next free of the 9 after it)
+  --data-port N     data TCP port (default 5161; same rule)
+  --discovery-port N  UDP port for discovery (default 5159)
+  --no-discovery    do not answer discovery: clients must give the address
+  --allow LIST      who may connect: local, any, addresses, ranges (default: local =
+                    loopback, 10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, IPv6 local)
+  --operators LIST  who may take control (default: same as --allow); others are viewers
+  --token TEXT      shared secret clients must give (or env MC_TOKEN); required when --allow
+                    goes beyond local networks
+
+OTHER
   --sdk DIR         folder of MVCAMSDK_X64.dll (default: the MindVision install folder)
   --no-camera       stage only
   --allow-laser     allow switching the laser on (off by default)
@@ -40,6 +52,11 @@ USAGE: mc-server [options]
   --log FILE        also write the log to FILE
   --no-color        plain log
   --debug           more log lines
+  --config FILE     options from a file (default: mc-server.conf next to the exe, if it exists),
+                    one per line: `bind = 192.168.1.10`, `allow-laser = true`; the command line wins
+
+COMMANDS
+  mc-server errors  all error codes as a table
 ";
 
 fn main() {
@@ -51,12 +68,17 @@ fn main() {
             print!("{HELP}");
             return;
         }
+        Some("errors") => {
+            print!("{}", mc_proto::errors::markdown());
+            return;
+        }
         Some("--version") => {
             println!("mc-server {}", mc_proto::VERSION);
             return;
         }
         _ => {}
     }
+    let args = with_config(args);
     let has = |k: &str| args.iter().any(|a| a == k);
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     log::init(!has("--no-color"), has("--debug"), arg("--log").as_deref());
@@ -66,6 +88,27 @@ fn main() {
     println!();
     println!("  {}  {}", paint(BOLD, &format!("MControl server {}", mc_proto::VERSION)), paint(DIM, "· Optosky ATR8300 + MindVision camera"));
     println!();
+
+    // ---- network first: a wrong address or a busy port stops us before any hardware is touched
+    let fail = |e: mc_proto::errors::McError| -> ! {
+        error!("NET", "{e}");
+        std::process::exit(2)
+    };
+    let bind: std::net::IpAddr = match arg("--bind").as_deref().unwrap_or("0.0.0.0").parse() {
+        Ok(ip) => ip,
+        Err(_) => fail(mc_proto::errors::McError::new("E101", format!("--bind {}", arg("--bind").unwrap_or_default()))),
+    };
+    let allow = arg("--allow").unwrap_or_else(|| "local".into());
+    let operators = arg("--operators").unwrap_or_else(|| allow.clone());
+    let token = arg("--token").or_else(|| std::env::var("MC_TOKEN").ok());
+    let access = match access::Access::new(&allow, &operators, token) {
+        Ok(a) => a,
+        Err(e) if e == "E121" => fail(mc_proto::errors::McError::new("E121", format!("--allow {allow}"))),
+        Err(e) => fail(mc_proto::errors::McError::new("E101", e)),
+    };
+    let (cl, control_port) = net::listen(bind, arg("--control-port").and_then(|v| v.parse().ok()).unwrap_or(mc_proto::CONTROL_PORT)).unwrap_or_else(|e| fail(e));
+    let (dl, data_port) = net::listen(bind, arg("--data-port").and_then(|v| v.parse().ok()).unwrap_or(mc_proto::DATA_PORT)).unwrap_or_else(|e| fail(e));
+    let discovery_port = if has("--no-discovery") { None } else { Some(arg("--discovery-port").and_then(|v| v.parse().ok()).unwrap_or(mc_proto::DISCOVERY_PORT)) };
 
     // ---- controller
     let mut cfg = stage::StageCfg::default();
@@ -192,29 +235,33 @@ fn main() {
     // ---- network
     let ncfg = net::Cfg {
         name: name.clone(),
-        control_port: arg("--control-port").and_then(|v| v.parse().ok()).unwrap_or(mc_proto::CONTROL_PORT),
-        data_port: arg("--data-port").and_then(|v| v.parse().ok()).unwrap_or(mc_proto::DATA_PORT),
+        control_port,
+        data_port,
+        discovery_port,
+        bind,
         dead_ms: arg("--dead-ms").and_then(|v| v.parse().ok()).unwrap_or(3000),
         viewer_fps: arg("--viewer-fps").and_then(|v| v.parse().ok()).unwrap_or(3.0),
+        access,
     };
-    let ip = primary_ip();
-    println!("  {}  {}", paint(DIM, "Name      "), paint(BOLD, &name));
-    println!("  {}  {}  {}", paint(DIM, "Control   "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.control_port)), paint(DIM, "Commands, replies, events"));
-    println!("  {}  {}  {}", paint(DIM, "Data      "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.data_port)), paint(DIM, "Frames"));
-    println!("  {}  {}  {}", paint(DIM, "Discovery "), paint(CYAN, &format!("udp {}", mc_proto::DISCOVERY_PORT)), paint(DIM, "Clients find the server by themselves"));
-    println!("  {}  {}", paint(DIM, "Laser     "), if cfg.allow_laser { paint(YELLOW, "Allowed") } else { "Blocked (--allow-laser to allow)".into() });
-    println!("  {}  {}", paint(DIM, "Stop      "), paint(GREEN, "Ctrl+C: stage stops, laser, motors and light off"));
+    let ip = if bind.is_unspecified() { primary_ip() } else { bind.to_string() };
+    let row = |k: &str, v: String, note: &str| println!("  {}  {}  {}", paint(DIM, &format!("{k:<10}")), v, paint(DIM, note));
+    let a = &ncfg.access;
+    row("Name", paint(BOLD, &name), "");
+    row("Control", paint(CYAN, &format!("tcp://{ip}:{control_port}")), "Commands, replies, events");
+    row("Data", paint(CYAN, &format!("tcp://{ip}:{data_port}")), "Frames");
+    match discovery_port {
+        Some(p) => row("Discovery", paint(CYAN, &format!("udp {p}")), "Clients find the server by themselves"),
+        None => row("Discovery", "Off".into(), "Clients give the address"),
+    }
+    let scope = if a.is_open() { paint(YELLOW, &a.allow_text) } else { a.allow_text.clone() };
+    row("Access", scope, if a.needs_token() { "Token required" } else { "No token" });
+    if a.operators_text != a.allow_text {
+        row("Operators", a.operators_text.clone(), "Others connect as viewers");
+    }
+    row("Laser", if cfg.allow_laser { paint(YELLOW, "Allowed") } else { "Blocked".into() }, if cfg.allow_laser { "" } else { "--allow-laser to allow" });
+    row("Stop", paint(GREEN, "Ctrl+C"), "Stage stops; laser, motors and light off");
     println!();
-    let srv = Arc::new(net::Server {
-        stage: st.clone(),
-        cam: cam.clone(),
-        hub,
-        sessions: Mutex::new(Vec::new()),
-        lease: Mutex::new(None),
-        cfg: ncfg,
-        started: now_ns(),
-    });
-    let _ = srv.started;
+    let srv = net::Server::new(st.clone(), cam.clone(), hub, ncfg);
 
     // ---- Ctrl+C: safe state, tell the guard, leave
     let (st2, cam2) = (st.clone(), cam.clone());
@@ -232,8 +279,8 @@ fn main() {
         std::process::exit(0);
     });
 
-    if let Err(e) = srv.run() {
-        error!("NET", "cannot listen: {e} (is another mc-server running?)");
+    if let Err(e) = srv.run(cl, dl) {
+        error!("NET", "E120 {e}");
         st.stop();
         let _ = st.call(|w| {
             w.safe_off("server cannot start");
@@ -245,6 +292,34 @@ fn main() {
         cam.close();
         std::process::exit(1);
     }
+}
+
+/// Options from `--config FILE` or mc-server.conf next to the exe, after the command line (which wins).
+fn with_config(mut args: Vec<String>) -> Vec<String> {
+    let given = args.iter().position(|a| a == "--config").and_then(|i| args.get(i + 1)).cloned();
+    let path = given.clone().or_else(|| {
+        std::env::current_exe().ok().map(|p| p.with_file_name("mc-server.conf").to_string_lossy().into_owned())
+    });
+    let Some(text) = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        if let Some(p) = given {
+            eprintln!("mc-server: cannot read --config {p}");
+            std::process::exit(2);
+        }
+        return args;
+    };
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let (k, v) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())).unwrap_or((line, "true"));
+        let k = format!("--{}", k.trim_start_matches('-'));
+        match v {
+            "true" | "yes" | "on" => args.push(k),
+            "false" | "no" | "off" => {}
+            _ => {
+                args.push(k);
+                args.push(v.trim_matches('"').to_string());
+            }
+        }
+    }
+    args
 }
 
 fn free_udp_port() -> u16 {

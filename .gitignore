@@ -12,3 +12,4 @@ mc-server-state.json
 .pytest_cache/
 snap.*
 .venv/
+node_modules

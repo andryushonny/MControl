@@ -1,6 +1,11 @@
 """Microscope (operator, full control) and Viewer (read-only). The instrument is split into parts:
 stage, camera, light, laser, cooler — each a small object on the same link."""
-from .link import Link, Stream
+import threading
+import time
+
+from .events import describe
+from .link import Link
+from .stream import Stream
 
 
 class _Part:
@@ -119,9 +124,10 @@ class _Client:
     ROLE = "viewer"
     RAW = False
 
-    def __init__(self, host=None, name=None, timeout=120.0):
-        """host: "1.2.3.4" / "pc:5160" / None = last used, then LAN discovery (remembered after)."""
-        self.link = Link(host, self.ROLE, name, timeout)
+    def __init__(self, host=None, name=None, token=None, timeout=120.0):
+        """host: "192.168.1.50", "pc-1:5170", "[fe80::1]"; omitted: MCONTROL_HOST, the last server used,
+        then LAN discovery. token: only if the server asks for one (also MCONTROL_TOKEN); remembered per server."""
+        self.link = Link(host, self.ROLE, name, timeout, token=token)
         self._stream = None
 
     # --- shared by both roles
@@ -136,20 +142,47 @@ class _Client:
             self._stream = Stream(self.link, raw=self.RAW, live=not self.RAW)
         return self._stream
 
-    def frames(self, fps=None):
-        """Live frames, forever: `for f in m.frames(): ...`"""
-        self.stream.set_live(True, fps)
-        return iter(self.stream)
+    def live(self, seconds=None, count=None, fps=None):
+        """Live frames while you loop:  `for f in m.live(seconds=5): ...`
+        Stops after `seconds` or `count` frames (or when you break); streaming is switched back afterwards."""
+        s = self.stream
+        was = s.on
+        s.live(True, fps)
+        end = None if seconds is None else time.monotonic() + seconds
+        try:
+            seq, n = (s.latest.seq if s.latest else 0), 0
+            while (count is None or n < count) and (end is None or time.monotonic() < end):
+                f = s.next_frame(after=seq)
+                seq, n = f.seq, n + 1
+                yield f
+        finally:
+            s.live(was)
 
     def latest(self, timeout=5.0):
         """The newest frame (waits for the first one)."""
-        s = self.stream
-        return s.latest or s.wait(timeout=timeout)
+        return self.stream.latest or self.stream.next_frame(timeout=timeout)
 
     def on_event(self, fn):
-        """fn(event dict) for telemetry / operator / error / closed events. Usable as a decorator."""
+        """fn(event dict) for every event: what the operator does (command), clients, telemetry (1 Hz), errors.
+        Usable as a decorator. describe(event) turns one into a line of text."""
         self.link.handlers.append(fn)
         return fn
+
+    def watch(self, seconds=None, telemetry=False, out=print):
+        """Print what happens on the microscope, one line per event, like the server log.
+        Blocks for `seconds` (None: until Ctrl+C)."""
+        def show(ev):
+            if telemetry or ev.get("event") != "telemetry":
+                line = describe(ev)
+                if line:
+                    out(line)
+        self.link.handlers.append(show)
+        try:
+            time.sleep(seconds) if seconds else threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.link.handlers.remove(show)
 
     def close(self):
         if self._stream:
@@ -172,17 +205,17 @@ class Viewer(_Client):
     def fetch(self, seq=0):
         """One full frame from the ring (0 = newest), at most 1/s for viewers."""
         r = self.link.call("frame", idempotent=True, seq=seq, preview=False)
-        return self.stream.wait(seq=r["seq"], preview=False)
+        return self.stream.frame(r["seq"], preview=False)
 
 
 class Microscope(_Client):
     """Operator: holds the lease (one at a time), full RAW frames, controls everything.
-    Live RAW streaming is off until you iterate frames(); snaps always arrive."""
+    Live RAW frames flow only inside live(); snaps always arrive."""
     ROLE = "operator"
     RAW = True
 
-    def __init__(self, host=None, name=None, timeout=120.0):
-        super().__init__(host, name, timeout)
+    def __init__(self, host=None, name=None, token=None, timeout=120.0):
+        super().__init__(host, name, token, timeout)
         l = self.link
         self.stage, self.camera, self.light, self.laser, self.cooler = Stage(l), Camera(l), Light(l), Laser(l), Cooler(l)
 
@@ -193,12 +226,12 @@ class Microscope(_Client):
         a = _xyz(x=x, y=y, z=z, dx=dx, dy=dy, dz=dz, settle_ms=settle_ms, timeout_ms=timeout_ms)
         s = self.stream
         r = self.link.call("snap", idempotent=not rel, **a)
-        return s.wait(seq=r["seq"], timeout=(timeout_ms or 5000) / 1000 + 5)
+        return s.frame(r["seq"], timeout=(timeout_ms or 5000) / 1000 + 5)
 
     def fetch(self, seq):
         """Re-fetch a frame still in the server ring (e.g. one you missed)."""
         r = self.link.call("frame", idempotent=True, seq=seq)
-        return self.stream.wait(seq=r["seq"])
+        return self.stream.frame(r["seq"])
 
     def stop(self):
         """Stage stops now."""

@@ -7,7 +7,8 @@
 """
 from .errors import McError
 from .frame import Frame
+from .events import describe
 from .microscope import Microscope, Viewer
 
-__all__ = ["Microscope", "Viewer", "Frame", "McError"]
+__all__ = ["Microscope", "Viewer", "Frame", "McError", "describe"]
 __version__ = "0.1.0"

@@ -1,4 +1,4 @@
-"""Connections to mc-server: Link (control: commands, events, clock sync, reconnect) and Stream (data: frames)."""
+"""Control connection to mc-server: commands, events, clock sync, reconnect."""
 import collections
 import itertools
 import json
@@ -8,10 +8,9 @@ import threading
 import time
 
 from .errors import McError
-from .frame import Frame
 from .wire import CONTROL_PORT, DATA_PORT, K_FRAME, Wire, discover
 
-_MEMO = os.path.join(os.path.expanduser("~"), ".mcontrol.json")
+_MEMO = os.environ.get("MCONTROL_CONFIG") or os.path.join(os.path.expanduser("~"), ".mcontrol.json")
 
 
 def _memo(key, value=None):
@@ -31,6 +30,17 @@ def _memo(key, value=None):
     return value
 
 
+def _split(h):
+    """'pc', 'pc:5170', '10.0.0.5', '[fe80::1]:5160', 'fe80::1' -> (host, port)."""
+    if h.startswith("["):
+        a, _, p = h[1:].partition("]")
+        return a, int(p.lstrip(":") or CONTROL_PORT)
+    if h.count(":") == 1:
+        a, _, p = h.partition(":")
+        return a, int(p)
+    return h, CONTROL_PORT
+
+
 def _candidates(host):
     """Where to look, in order: given > MCONTROL_HOST > last good one > LAN discovery."""
     seen = []
@@ -48,8 +58,9 @@ class Link:
     """Control connection. Thread-safe. Reconnects by itself; repeats a command after a reconnect
     only when repeating it is harmless (idempotent: absolute targets, settings, reads)."""
 
-    def __init__(self, host=None, role="viewer", name=None, timeout=120.0, reconnect_s=10.0):
+    def __init__(self, host=None, role="viewer", name=None, timeout=120.0, reconnect_s=10.0, token=None):
         self.role, self.name, self.timeout = role, name or socket.gethostname(), timeout
+        self.token = token or os.environ.get("MCONTROL_TOKEN")   # else the one remembered for that server
         self.reconnect_s = reconnect_s         # how long an idempotent command waits for the server to come back
         self.host = host
         self._ids = itertools.count(1)
@@ -68,19 +79,33 @@ class Link:
     def _connect(self):
         errors = []
         for h in _candidates(self.host):
-            ip, _, port = h.partition(":")
+            ip, port = _split(h)
+            token = self.token or (_memo("tokens") or {}).get(h)
             try:
-                w = Wire(ip, int(port or CONTROL_PORT))
-                w.send({"cmd": "hello", "id": 0, "role": self.role, "name": self.name, "client": "mcontrol-py"})
+                w = Wire(ip, port)
+                hello = {"cmd": "hello", "id": 0, "role": self.role, "name": self.name, "client": "mcontrol-py"}
+                if token:
+                    hello["token"] = token
+                w.sock.settimeout(5.0)             # something else may sit on that port and never answer
+                w.send(hello)
                 r = w.recv_json()
-            except OSError as e:
+                while "event" in r:                # an event can overtake the reply to hello
+                    r = w.recv_json()
+                w.sock.settimeout(None)
+            except (OSError, ValueError, ConnectionError) as e:
                 errors.append(f"{h}: {e}")
                 continue
             if not r.get("ok"):
                 w.close()
-                raise McError.from_reply(r.get("error", {}))   # refusal (E103 lease held) is final
+                e = McError.from_reply(r.get("error", {}))
+                if e.code in ("E103", "E111", "E112", "E113"):   # the server said no: final
+                    raise e
+                errors.append(f"{h}: {e}")        # not a control port (e.g. a remembered port that moved)
+                continue
             self.w, self.addr, self.session, self.server = w, ip, r["session"], r.get("server", {})
             _memo("host", h)
+            if token:                          # so it is given once per server, not in every script
+                _memo("tokens", {**(_memo("tokens") or {}), h: token})
             threading.Thread(target=self._reader, args=(w,), daemon=True, name="mc-ctl").start()
             return
         raise McError("E110", "no mc-server reachable", "; ".join(errors) or "none found on the LAN")
@@ -198,83 +223,3 @@ class Link:
         except OSError:
             pass
         self.w.close()
-
-
-class Stream:
-    """Data connection: frames in a background thread. Keeps the latest frame and the last few by seq,
-    so a snap/refetch reply and its pixels meet regardless of order. Follows the Link through reconnects."""
-
-    def __init__(self, link, raw, fps=None, live=True, keep=16):
-        self.link, self.raw, self.fps, self.live = link, raw, fps, live
-        self._cv = threading.Condition()
-        self._recent = collections.OrderedDict()
-        self._keep = keep
-        self.latest = None
-        self.w = None
-        self._open()
-        link.on_reconnect.append(self._open)
-
-    def _open(self):
-        if self.w:
-            self.w.close()
-        port = int(self.link.server.get("data_port", DATA_PORT))
-        w = Wire(self.link.addr, port)
-        hello = {"session": self.link.session, "want": "raw" if self.raw else "preview"}
-        if self.fps:
-            hello["fps"] = self.fps                # else the server's --viewer-fps
-        w.send(hello)
-        r = w.recv_json()
-        if not r.get("ok"):
-            raise McError.from_reply(r.get("error", {}))
-        self.w = w
-        threading.Thread(target=self._reader, args=(w,), daemon=True, name="mc-data").start()
-        if not self.live:
-            self.link.call("stream", idempotent=True, on=False)
-
-    def set_live(self, on, fps=None):
-        if (on, fps) != (self.live, self.fps):
-            self.live, self.fps = on, fps or self.fps
-            args = {"on": on} | ({"fps": self.fps} if self.fps else {})
-            self.link.call("stream", idempotent=True, **args)
-
-    def _reader(self, w):
-        try:
-            while True:
-                k, p = w.recv()
-                if k != K_FRAME:
-                    continue
-                f = Frame.parse(p, self.link.offset_ns)
-                with self._cv:
-                    self.latest = f
-                    self._recent[(f.seq, f.is_preview)] = f
-                    while len(self._recent) > self._keep:
-                        self._recent.popitem(last=False)
-                    self._cv.notify_all()
-        except (OSError, ConnectionError, ValueError):
-            pass
-
-    def wait(self, seq=None, after=None, timeout=10.0, preview=None):
-        """Frame with this seq (preview=None: as this stream sends), or the first one newer than `after`.
-        A live preview and a full re-fetch of the same seq are different frames."""
-        key = (seq, (not self.raw) if preview is None else preview)
-        end = time.monotonic() + timeout
-        with self._cv:
-            while True:
-                if seq is not None and key in self._recent:
-                    return self._recent[key]
-                if seq is None and self.latest and (after is None or self.latest.seq > after):
-                    return self.latest
-                left = end - time.monotonic()
-                if left <= 0 or not self._cv.wait(left):
-                    raise McError("E109", "frame did not arrive in time", f"seq {seq}")
-
-    def __iter__(self):
-        last = self.latest.seq if self.latest else 0
-        while True:
-            f = self.wait(after=last, timeout=30.0)
-            last = f.seq
-            yield f
-
-    def close(self):
-        if self.w:
-            self.w.close()

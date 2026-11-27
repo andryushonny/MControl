@@ -1,16 +1,18 @@
 //! Network: control (commands, replies, events), data (frames), discovery.
-//! One thread per connection: the old PC's cores serve clients in parallel, and a slow client blocks only itself.
+//! One thread per connection: the server PC's cores serve clients in parallel, and a slow client blocks only itself.
 
+use crate::access::{random_id, Access};
 use crate::camera::Camera;
 use crate::frames::{Frame, Hub, Outbox, Want};
 use crate::log::{paint, rate, Level, BLUE, BOLD, DIM, GREEN};
 use crate::stage::Stage;
 use mc_proto::clock::now_ns;
 use mc_proto::errors::{McError, McResult};
-use mc_proto::{read_msg, write_frame, write_json, DISCOVERY_ASK, K_JSON};
+use mc_proto::{read_msg_max, write_frame, write_json, DISCOVERY_ASK, K_JSON, MAX_CMD};
 use serde_json::{json, Value};
 use std::io::BufWriter;
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -37,11 +39,7 @@ pub struct Session {
 
 impl Session {
     pub fn who(&self) -> String {
-        let (c, r) = match self.role {
-            Role::Operator => (GREEN, "operator"),
-            Role::Viewer => (BLUE, "viewer"),
-        };
-        format!("{} {} {}", paint(c, r), paint(BOLD, &self.name), paint(DIM, &self.addr.ip().to_string()))
+        who(self.role, &self.name, &self.addr)
     }
 
     pub fn send(&self, v: &Value) {
@@ -56,15 +54,45 @@ impl Session {
     }
 }
 
+/// "operator NAME 1.2.3.4", coloured; the one way a client is named in the log.
+pub fn who(role: Role, name: &str, addr: &SocketAddr) -> String {
+    let (c, r) = match role {
+        Role::Operator => (GREEN, "operator"),
+        Role::Viewer => (BLUE, "viewer"),
+    };
+    format!("{} {} {}", paint(c, r), paint(BOLD, name), paint(DIM, &addr.ip().to_string()))
+}
+
 pub struct Cfg {
     pub name: String,
     pub control_port: u16,
     pub data_port: u16,
+    pub discovery_port: Option<u16>,
+    pub bind: IpAddr,
     pub dead_ms: u64,
     pub viewer_fps: f64,
+    pub access: Access,
+}
+
+/// Listen on `port`, or on the next free one of the 9 after it (another program may hold it).
+pub fn listen(bind: IpAddr, port: u16) -> McResult<(TcpListener, u16)> {
+    let mut last = String::new();
+    for p in port..port.saturating_add(10) {
+        match TcpListener::bind((bind, p)) {
+            Ok(l) => {
+                if p != port {
+                    warn!("NET", "Port {port} busy: using {p} (discovery tells clients)");
+                }
+                return Ok((l, p));
+            }
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(McError::new("E120", format!("{bind}:{port}..{}: {last}", port.saturating_add(9))))
 }
 
 pub struct Server {
+    refused: Mutex<HashMap<IpAddr, u64>>,
     pub stage: Arc<Stage>,
     pub cam: Arc<Camera>,
     pub hub: Arc<Hub>,
@@ -92,9 +120,24 @@ fn f3(v: &Value, k: &str) -> Option<f64> {
 }
 
 impl Server {
-    pub fn run(self: &Arc<Self>) -> std::io::Result<()> {
-        let cl = TcpListener::bind(("0.0.0.0", self.cfg.control_port))?;
-        let dl = TcpListener::bind(("0.0.0.0", self.cfg.data_port))?;
+    pub fn new(stage: Arc<Stage>, cam: Arc<Camera>, hub: Arc<Hub>, cfg: Cfg) -> Arc<Server> {
+        Arc::new(Server { refused: Mutex::new(HashMap::new()), stage, cam, hub, sessions: Mutex::new(Vec::new()),
+                          lease: Mutex::new(None), cfg, started: now_ns() })
+    }
+
+    /// Refuse a client before it gets a session; logged once a minute per address (scanners stay quiet).
+    fn refuse(&self, w: &mut TcpStream, id: &Value, e: McError, who: String) {
+        let _ = write_json(w, &err(id, &e));
+        let ip = w.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+        let mut r = self.refused.lock().unwrap();
+        let t = r.entry(ip).or_insert(0);
+        if now_ns().saturating_sub(*t) > 60_000_000_000 {
+            *t = now_ns();
+            warn!("NET", "{who}  refused: {e}");
+        }
+    }
+
+    pub fn run(self: &Arc<Self>, cl: TcpListener, dl: TcpListener) -> std::io::Result<()> {
         let s = self.clone();
         std::thread::Builder::new().name("data-accept".into()).spawn(move || {
             for c in dl.incoming().flatten() {
@@ -119,6 +162,13 @@ impl Server {
         self.lease.lock().unwrap().clone()
     }
 
+    /// An event for every client (viewers see everything the operator does): `{"event": kind, "t_server", ...fields}`.
+    pub fn event(&self, kind: &str, mut fields: Value) {
+        fields["event"] = json!(kind);
+        fields["t_server"] = json!(now_ns());
+        self.broadcast(&fields);
+    }
+
     pub fn broadcast(&self, v: &Value) {
         let list = self.sessions.lock().unwrap().clone();
         for s in list {
@@ -128,8 +178,13 @@ impl Server {
 
     // ---------------------------------------------------------------- control
 
-    fn control_conn(self: Arc<Self>, c: TcpStream) {
+    fn control_conn(self: Arc<Self>, mut c: TcpStream) {
         let addr = c.peer_addr().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
+        if !self.cfg.access.allowed(&addr.ip()) {
+            let ip = addr.ip().to_string();
+            self.refuse(&mut c, &Value::Null, McError::new("E111", ip.clone()), format!("client {ip}"));
+            return;
+        }
         let _ = c.set_nodelay(true);
         let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
         let mut rd = match c.try_clone() {
@@ -138,7 +193,7 @@ impl Server {
         };
         let mut buf = Vec::new();
         // hello
-        let hello: Value = match read_msg(&mut rd, &mut buf) {
+        let hello: Value = match read_msg_max(&mut rd, &mut buf, MAX_CMD) {
             Ok(K_JSON) => serde_json::from_slice(&buf).unwrap_or(Value::Null),
             _ => return,
         };
@@ -152,9 +207,21 @@ impl Server {
             return;
         }
         let role = if hello["role"] == "operator" { Role::Operator } else { Role::Viewer };
-        let name = hello["name"].as_str().unwrap_or("?").chars().take(40).collect::<String>();
+        let name = hello["name"].as_str().unwrap_or("?").chars().filter(|c| !c.is_control()).take(40).collect::<String>();
+        let a = &self.cfg.access;
+        let refusal = if !a.token_ok(hello["token"].as_str().unwrap_or("")) {
+            Some(McError::new("E112", ""))
+        } else if role == Role::Operator && !a.may_operate(&addr.ip()) {
+            Some(McError::new("E113", addr.ip().to_string()))
+        } else {
+            None
+        };
+        if let Some(e) = refusal {
+            self.refuse(&mut w, &id, e, who(role, &name, &addr));
+            return;
+        }
         let sess = Arc::new(Session {
-            id: format!("{:016x}", now_ns() ^ ((addr.port() as u64) << 48) ^ (std::process::id() as u64) << 20),
+            id: random_id(),
             role,
             name,
             addr,
@@ -182,15 +249,16 @@ impl Server {
         info!("NET", "{}  connected", sess.who());
         sess.send(&ok(&id, json!({"session": sess.id, "role": if role == Role::Operator { "operator" } else { "viewer" },
             "server": self.info(), "t_server": now_ns()})));
+        self.event("client", client_json(&sess, "connected")); // after the reply: hello's answer comes first
         if role == Role::Operator {
-            self.broadcast(&json!({"event": "operator", "name": sess.name, "addr": sess.addr.ip().to_string()}));
+            self.event("operator", json!({"name": sess.name, "addr": sess.addr.ip().to_string()}));
         }
         let _ = rd.set_read_timeout(Some(Duration::from_millis(500)));
         loop {
             if !sess.alive.load(Ordering::Relaxed) {
                 break;
             }
-            match read_msg(&mut rd, &mut buf) {
+            match read_msg_max(&mut rd, &mut buf, MAX_CMD) {
                 Ok(K_JSON) => {
                     let t2 = now_ns();
                     sess.last_seen.store(t2, Ordering::Relaxed);
@@ -228,9 +296,10 @@ impl Server {
             }
         };
         info!("NET", "{}  {} after {:.0} s", sess.who(), why, (now_ns() - sess.since) as f64 / 1e9);
+        self.event("client", client_json(sess, why));
         if was_op {
             self.safe_stop("operator gone");
-            self.broadcast(&json!({"event": "operator", "name": null}));
+            self.event("operator", json!({"name": null}));
         }
     }
 
@@ -241,6 +310,7 @@ impl Server {
         let laser = st.shared.lock().unwrap().laser;
         if laser > 0 || st.shared.lock().unwrap().moving {
             warn!("STAGE", "{why}: stage stopped, laser off");
+            self.event("safe", json!({"why": why}));
         }
         std::thread::spawn(move || {
             let _ = st.call(|w| {
@@ -323,15 +393,19 @@ impl Server {
         }
         if cmd == "stop" {
             self.stage.stop();
-            warn!("STAGE", "Stop by {}", sess.name);
+            self.report(sess, &cmd, &v, Ok(&json!({})), 0.0);
             sess.send(&ok(&id, json!({})));
             return;
         }
         if cmd == "release" {
             *self.lease.lock().unwrap() = None;
-            self.broadcast(&json!({"event": "operator", "name": null}));
+            self.report(sess, &cmd, &v, Ok(&json!({})), 0.0);
+            self.event("operator", json!({"name": null}));
             sess.send(&ok(&id, json!({})));
             return;
+        }
+        if !is_read(&cmd) {
+            self.event("command", json!({"state": "started", "by": sess.name, "cmd": cmd, "args": cmd_args_json(&v)}));
         }
         // long jobs: on their own thread, so `stop` and pings keep flowing
         let s = self.clone();
@@ -341,11 +415,11 @@ impl Server {
             let r = s.run_cmd(&sess, &cmd, &v);
             match r {
                 Ok(x) => {
-                    log_cmd(&sess, &cmd, &v, Ok(&x), (now_ns() - t0) as f64 / 1e6);
+                    s.report(&sess, &cmd, &v, Ok(&x), (now_ns() - t0) as f64 / 1e6);
                     sess.send(&ok(&id, x))
                 }
                 Err(e) => {
-                    log_cmd(&sess, &cmd, &v, Err(&e), (now_ns() - t0) as f64 / 1e6);
+                    s.report(&sess, &cmd, &v, Err(&e), (now_ns() - t0) as f64 / 1e6);
                     sess.send(&err(&id, &e));
                 }
             }
@@ -438,6 +512,9 @@ impl Server {
 
     fn data_conn(self: Arc<Self>, c: TcpStream) {
         let addr = c.peer_addr().ok();
+        if !addr.map_or(false, |a| self.cfg.access.allowed(&a.ip())) {
+            return; // the control connection already told it why
+        }
         let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
         let _ = c.set_nodelay(true);
         let mut rd = match c.try_clone() {
@@ -445,7 +522,7 @@ impl Server {
             Err(_) => return,
         };
         let mut buf = Vec::new();
-        let hello: Value = match read_msg(&mut rd, &mut buf) {
+        let hello: Value = match read_msg_max(&mut rd, &mut buf, MAX_CMD) {
             Ok(K_JSON) => serde_json::from_slice(&buf).unwrap_or(Value::Null),
             _ => return,
         };
@@ -500,6 +577,42 @@ impl Server {
         crate::debug!("DATA", "{} data link closed", sess.who());
     }
 
+    /// A finished operator command, said once in one shape: a log line for the console and a `command` event
+    /// for every client: what was asked, what came out (or the error), how long it took, by whom.
+    fn report(&self, sess: &Session, cmd: &str, v: &Value, r: Result<&Value, &McError>, ms: f64) {
+        if is_read(cmd) {
+            return;
+        }
+        let args = cmd_args_json(v);
+        let by = paint(DIM, &format!("{ms:.0} ms  by {}", sess.name));
+        let r = match r {
+            Ok(x) => x,
+            Err(e) => {
+                crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{cmd} {}  {e}  {by}", cmd_args(v)));
+                self.event("command", json!({"state": "failed", "by": sess.name, "cmd": cmd, "args": args, "error": e.json(), "ms": ms.round()}));
+                return;
+            }
+        };
+        let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
+        let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
+            format!("at ({p})")
+        } else if let Some(seq) = r.get("seq") {
+            format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
+        } else {
+            String::new()
+        };
+        let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
+        let line = [format!("{cmd} {}", cmd_args(v)), if out.is_empty() { out.clone() } else { paint(BOLD, &out) }, by];
+        crate::log::log(level, cmd_tag(cmd), &line.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join("  "));
+        let mut result = r.clone();
+        if let Some(o) = result.as_object_mut() {
+            o.remove("id");
+            o.remove("ok");
+        }
+        self.event("command", json!({"state": "done", "by": sess.name, "cmd": cmd, "args": args, "result": result,
+                                    "summary": out, "ms": ms.round()}));
+    }
+
     // ---------------------------------------------------------------- background
 
     fn watchdog(self: Arc<Self>) {
@@ -509,10 +622,10 @@ impl Server {
                 let silent = (now_ns() - h.last_seen.load(Ordering::Relaxed)) / 1_000_000;
                 if silent > self.cfg.dead_ms {
                     error!("NET", "{}  silent for {} ms: E105 control released", h.who(), silent);
-                    h.send(&json!({"event": "error", "error": McError::new("E105", format!("{silent} ms")).json()}));
+                    self.event("error", json!({"by": h.name, "error": McError::new("E105", format!("{silent} ms")).json()}));
                     *self.lease.lock().unwrap() = None;
                     self.safe_stop("operator silent");
-                    self.broadcast(&json!({"event": "operator", "name": null}));
+                    self.event("operator", json!({"name": null}));
                 }
             }
         }
@@ -546,17 +659,19 @@ impl Server {
     }
 
     fn discovery(self: Arc<Self>) {
-        let Ok(sock) = UdpSocket::bind(("0.0.0.0", mc_proto::DISCOVERY_PORT)) else {
-            warn!("NET", "discovery port {} busy: clients must give the address", mc_proto::DISCOVERY_PORT);
+        let Some(port) = self.cfg.discovery_port else { return };
+        let Ok(sock) = UdpSocket::bind((self.cfg.bind, port)) else {
+            warn!("NET", "Discovery port {port} busy: clients must give the address");
             return;
         };
         let mut b = [0u8; 64];
         loop {
             if let Ok((n, from)) = sock.recv_from(&mut b) {
-                if &b[..n] == DISCOVERY_ASK {
+                if &b[..n] == DISCOVERY_ASK && self.cfg.access.allowed(&from.ip()) {
                     let v = json!({"mcontrol": mc_proto::VERSION, "name": self.cfg.name, "control_port": self.cfg.control_port,
                                    "data_port": self.cfg.data_port, "operator": self.holder().map(|h| h.name.clone()),
-                                   "camera": self.cam.info.lock().unwrap()["model"], "controller": self.stage.port});
+                                   "camera": self.cam.info.lock().unwrap()["model"], "controller": self.stage.port,
+                                   "token": self.cfg.access.needs_token()});
                     let _ = sock.send_to(v.to_string().as_bytes(), from);
                     crate::debug!("NET", "discovery answer to {from}");
                 }
@@ -575,30 +690,23 @@ fn cmd_tag(cmd: &str) -> &'static str {
     if matches!(cmd, "exposure" | "gain" | "auto_exposure" | "white_balance") { "CAM" } else { "STAGE" }
 }
 
-/// One line per finished operator command, in one shape: what was asked, what came out (or the error), how long, by whom.
-fn log_cmd(sess: &Session, cmd: &str, v: &Value, r: Result<&Value, &McError>, ms: f64) {
-    let r = match r {
-        Ok(x) => x,
-        Err(e) => {
-            crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{cmd} {}  {e}  {}", cmd_args(v), paint(DIM, &format!("by {}", sess.name))));
-            return;
-        }
-    };
-    if matches!(cmd, "camera_state" | "temperature") {
-        return; // reads, not actions
+fn cmd_args_json(v: &Value) -> Value {
+    let mut a = v.clone();
+    if let Some(o) = a.as_object_mut() {
+        o.remove("cmd");
+        o.remove("id");
     }
-    let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
-    let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
-        format!("at ({p})")
-    } else if let Some(seq) = r.get("seq") {
-        format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
-    } else {
-        String::new()
-    };
-    let tag = cmd_tag(cmd);
-    let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
-    let parts = [format!("{cmd} {}", cmd_args(v)), if out.is_empty() { out } else { paint(BOLD, &out) }, paint(DIM, &format!("{ms:.0} ms  by {}", sess.name))];
-    crate::log::log(level, tag, &parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join("  "));
+    a
+}
+
+/// Reads change nothing: they are not announced.
+fn is_read(cmd: &str) -> bool {
+    matches!(cmd, "camera_state" | "temperature")
+}
+
+fn client_json(sess: &Session, action: &str) -> Value {
+    json!({"action": action, "role": if sess.role == Role::Operator { "operator" } else { "viewer" }, "name": sess.name,
+           "addr": sess.addr.ip().to_string(), "after_s": ((now_ns() - sess.since) as f64 / 1e9).round()})
 }
 
 /// Build a frame from the worker's header: number it and add where the stage was during the exposure.

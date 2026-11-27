@@ -54,10 +54,17 @@ pub fn write_frame<W: Write>(w: &mut W, header: &[u8], pixels: &[u8]) -> io::Res
 
 /// Read one message into `buf` (reused between calls). Returns its kind.
 pub fn read_msg<R: Read>(r: &mut R, buf: &mut Vec<u8>) -> io::Result<u8> {
+    read_msg_max(r, buf, MAX_MSG)
+}
+
+/// Commands from clients are small: a server reads them with a low `max`, so nobody can make it allocate much.
+pub const MAX_CMD: usize = 64 << 10;
+
+pub fn read_msg_max<R: Read>(r: &mut R, buf: &mut Vec<u8>, max: usize) -> io::Result<u8> {
     let mut head = [0u8; 5];
     r.read_exact(&mut head)?;
     let n = u32::from_le_bytes([head[0], head[1], head[2], head[3]]) as usize;
-    if n == 0 || n > MAX_MSG {
+    if n == 0 || n > max {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("bad message length {n}")));
     }
     buf.clear();

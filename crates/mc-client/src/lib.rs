@@ -71,7 +71,8 @@ impl Client {
         c.set_nodelay(true)?;
         let mut r = BufReader::new(c.try_clone()?);
         let mut w = c;
-        write_json(&mut w, &json!({"cmd": "hello", "id": 0, "role": role, "name": name, "client": "mc-client", "version": mc_proto::VERSION}))?;
+        write_json(&mut w, &json!({"cmd": "hello", "id": 0, "role": role, "name": name, "client": "mc-client", "version": mc_proto::VERSION,
+            "token": std::env::var("MCONTROL_TOKEN").unwrap_or_default()}))?;
         let mut buf = Vec::new();
         read_msg(&mut r, &mut buf)?;
         let v: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
