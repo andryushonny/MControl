@@ -128,6 +128,8 @@ fn main() {
     println!("  {}  {}", paint(BOLD, &format!("MControl server {}", mc_proto::VERSION)), paint(DIM, "· Optosky ATR8300 + MindVision camera"));
     println!();
 
+    keep_awake();
+
     // ---- network first: a wrong address or a busy port stops us before any hardware is touched
     let fail = |e: mc_proto::errors::McError| -> ! {
         error!("NET", "{e}");
@@ -385,3 +387,19 @@ fn hostname() -> String {
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok().map(|s| s.trim().to_string()))
         .unwrap_or_else(|| "mc-server".into())
 }
+
+/// While the server runs, Windows must not go to sleep: the stage, the camera and the clients would be cut off.
+#[cfg(windows)]
+fn keep_awake() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetThreadExecutionState(flags: u32) -> u32;
+    }
+    const ES_CONTINUOUS: u32 = 0x8000_0000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
+    // SAFETY: plain Win32 call; the flags stay in force for this (main) thread, which lives as long as the server
+    unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+}
+
+#[cfg(not(windows))]
+fn keep_awake() {}

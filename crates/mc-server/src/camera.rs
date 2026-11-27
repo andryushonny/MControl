@@ -85,6 +85,7 @@ pub fn worker_main(args: &[String]) -> ! {
     // frames
     let mut off_min: Option<(u64, i128)> = None; // camera clock -> server clock, lower envelope
     let mut last_err = String::new();
+    let mut failing_since: Option<u64> = None;
     loop {
         while let Ok(rep) = rrx.try_recv() {
             let _ = write_json(&mut out, &rep);
@@ -103,6 +104,7 @@ pub fn worker_main(args: &[String]) -> ! {
         match got {
             Ok((t_got, w, h, fmt, bits, dev_ts, exp_us, gain, px)) => {
                 last_err.clear();
+                failing_since = None;
                 // the camera's own clock (0.1 ms) fixes when the frame was taken; the smallest (arrival - camera time)
                 // of recent frames is the offset (the least delayed arrival). Re-measured every 10 s.
                 let cam_ns = dev_ts as i128 * 100_000;
@@ -128,6 +130,14 @@ pub fn worker_main(args: &[String]) -> ! {
                     let _ = write_json(&mut out, &json!({"event": "error", "error": e.json()}));
                     let _ = out.flush();
                     last_err = s;
+                }
+                // no frame for 3 s (cable pulled, camera reset): leave; the server starts a fresh worker,
+                // which opens the camera again
+                let since = *failing_since.get_or_insert(now_ns());
+                if now_ns() - since > 3_000_000_000 {
+                    let _ = write_json(&mut out, &json!({"event": "error", "error": McError::new("E505", "no frame for 3 s: opening the camera again").json()}));
+                    let _ = out.flush();
+                    std::process::exit(3);
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -250,6 +260,8 @@ pub struct Camera {
     pub ok: AtomicBool,
     pub info: Mutex<Value>,
     pub frames: AtomicU64,
+    last_frame_ns: AtomicU64,
+    settings: Mutex<Vec<Value>>, // the operator's last exposure / gain / auto exposure: given again to a new worker
     closing: AtomicBool,
 }
 
@@ -264,6 +276,8 @@ impl Camera {
             ok: AtomicBool::new(false),
             info: Mutex::new(json!({})),
             frames: AtomicU64::new(0),
+            last_frame_ns: AtomicU64::new(0),
+            settings: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
         });
         let c2 = cam.clone();
@@ -271,7 +285,26 @@ impl Camera {
             .name("camera".into())
             .spawn(move || c2.supervise(worker_args, on_frame))
             .expect("camera thread");
+        let c3 = cam.clone();
+        std::thread::Builder::new().name("camera-watch".into()).spawn(move || c3.watch()).expect("camera thread");
         cam
+    }
+
+    /// A worker that streamed and then went silent (stuck inside the camera driver) is stopped,
+    /// so the supervisor starts a fresh one. Allowance: 5 s plus the exposure.
+    fn watch(self: Arc<Self>) {
+        while !self.closing.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(500));
+            let last = self.last_frame_ns.load(Ordering::Relaxed);
+            let exp_ms = self.info.lock().unwrap()["exposure_ms"].as_f64().unwrap_or(0.0);
+            if self.ok.load(Ordering::Relaxed) && last > 0 && now_ns() - last > 5_000_000_000 + (exp_ms * 1e6) as u64 {
+                error!("CAM", "E505 No frame for {:.0} s: restarting the camera worker", (now_ns() - last) as f64 / 1e9);
+                self.last_frame_ns.store(0, Ordering::Relaxed);
+                if let Some(c) = self.child.lock().unwrap().as_mut() {
+                    let _ = c.kill();
+                }
+            }
+        }
     }
 
     fn supervise(self: Arc<Self>, args: Vec<String>, on_frame: Arc<dyn Fn(CamFrame) + Send + Sync>) {
@@ -302,6 +335,7 @@ impl Camera {
                 if kind == K_FRAME {
                     if let Ok((hdr, px)) = split_frame(&buf) {
                         self.frames.fetch_add(1, Ordering::Relaxed);
+                        self.last_frame_ns.store(now_ns(), Ordering::Relaxed);
                         fails = 0;
                         if !self.ok.swap(true, Ordering::SeqCst) {
                             let mut i = self.info.lock().unwrap();
@@ -323,6 +357,11 @@ impl Camera {
                             i["serial"] = v["serial"].clone();
                             crate::debug!("CAM", "Camera {} opened", v["model"].as_str().unwrap_or("?"));
                             last_fatal.clear();
+                            drop(i);
+                            // a camera opened again keeps the operator's settings
+                            for s in self.settings.lock().unwrap().clone() {
+                                self.tell(s);
+                            }
                         }
                         Some("fatal") => {
                             let m = v["error"]["msg"].as_str().unwrap_or("?").to_string();
@@ -396,6 +435,14 @@ impl Camera {
             McError::new("E505", "the camera did not answer")
         })?;
         if r["ok"].as_bool() == Some(true) {
+            let name = v["cmd"].as_str().unwrap_or("").to_string();
+            if matches!(name.as_str(), "exposure" | "gain" | "auto_exposure") {
+                let mut st = self.settings.lock().unwrap();
+                st.retain(|s| s["cmd"] != name.as_str() && !(name == "exposure" && s["cmd"] == "auto_exposure"));
+                let mut keep = v.clone();
+                keep.as_object_mut().map(|o| o.remove("id"));
+                st.push(keep);
+            }
             Ok(r["result"].clone())
         } else {
             let code = r["error"]["code"].as_str().unwrap_or("E503");

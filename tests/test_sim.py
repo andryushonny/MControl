@@ -223,3 +223,17 @@ def test_codecs(server):
     with Microscope(HOST) as m:                            # auto on a fast link: exact
         assert m.snap().codec == "lossless"
         assert all(fr.codec == "lossless" for fr in m.live(count=10))
+
+
+# ---------------------------------------------------------------- PC 1 keeps its devices
+
+@pytest.mark.skipif(os.name == "nt", reason="finds the worker with pgrep")
+def test_camera_worker_comes_back_with_its_settings(server):
+    with Microscope(HOST) as m:
+        m.camera.exposure_ms = 33
+        worker = subprocess.run(["pgrep", "-P", str(server.pid), "-f", "camera-worker"], capture_output=True, text=True).stdout.split()
+        os.kill(int(worker[0]), 9)                         # the camera driver dies
+        time.sleep(3)
+        f = m.snap()                                       # frames again, from a new worker
+        assert abs(f.exposure_ms - 33) < 1                 # with the operator's exposure
+        assert "starting it again" in open(server.logfile).read()

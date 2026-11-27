@@ -69,6 +69,7 @@ pub struct Shared {
     pub segs: VecDeque<Seg>,
     pub settled_ns: u64,
     pub step_um: f64,
+    pub link_ok: bool, // the controller answers (checked every 2 s when idle)
 }
 
 impl Shared {
@@ -109,7 +110,7 @@ impl Shared {
             "uncertain": AXES.iter().zip(self.uncertain).filter(|a| a.1).map(|a| a.0).collect::<Vec<_>>(),
             "light": self.light, "laser_mw": self.laser, "laser_max_mw": self.laser_max,
             "motors": self.motors, "cooling": self.cooling, "device": self.ident,
-            "step_um": self.step_um,
+            "step_um": self.step_um, "link_ok": self.link_ok,
         })
     }
 }
@@ -157,6 +158,7 @@ impl Stage {
             ident: Value::Null,
             segs: VecDeque::new(),
             settled_ns: now_ns(),
+            link_ok: true,
             step_um: cfg.step_um,
         };
         if saved.2 {
@@ -199,14 +201,23 @@ impl Stage {
 }
 
 fn run(mut w: Worker, rx: Receiver<(Job, Sender<McResult<Value>>)>) {
+    let mut last_check = now_ns();
     loop {
         w.tick.store(now_ns(), Ordering::Relaxed);
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok((job, rtx)) => {
                 let r = job(&mut w);
+                last_check = now_ns();
                 let _ = rtx.send(r);
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // idle: keep the link to the controller alive and checked, reopen it if it went away
+                let ok = w.shared.lock().unwrap().link_ok;
+                if now_ns() - last_check > if ok { 2_000_000_000 } else { 3_000_000_000 } {
+                    w.keepalive();
+                    last_check = now_ns();
+                }
+            }
             Err(_) => break,
         }
     }
@@ -248,6 +259,46 @@ impl Worker {
         sh.laser_max = if laser_max <= 2000 { laser_max } else { 0 };
         sh.cooling = cooled;
         Ok(())
+    }
+
+    /// Ask the controller something harmless; if it does not answer, open the port again and redo the
+    /// handshake (the USB cable was pulled, the controller was switched off and on). The laser stays off.
+    fn keepalive(&mut self) {
+        let was = self.shared.lock().unwrap().link_ok;
+        if was {
+            match self.ctl.cmd(C::GET_SN, &[], 1000) {
+                Ok(_) => return,
+                Err(e) => {
+                    warn!("STAGE", "Controller {} not answering ({}): reconnecting", self.ctl.name, e.code);
+                    let mut sh = self.shared.lock().unwrap();
+                    sh.link_ok = false;
+                    sh.laser = 0;
+                }
+            }
+        }
+        let name = self.ctl.name.clone();
+        let reopened = Controller::open(&name).and_then(|c| {
+            self.ctl = c;
+            self.handshake()
+        });
+        match reopened {
+            Ok(()) => {
+                let (light, motors) = {
+                    let mut sh = self.shared.lock().unwrap();
+                    sh.link_ok = true;
+                    (sh.light, sh.motors)
+                };
+                // the controller may have restarted: give back the light and motor state it had (never the laser)
+                if light > 0 {
+                    let _ = self.ctl.cmd(C::LIGHT, &(light as u16).to_be_bytes(), 1000);
+                }
+                if motors {
+                    let _ = self.ctl.cmd(C::TURN_MOTOR, &[1], 1000);
+                }
+                info!("STAGE", "Controller {name} back");
+            }
+            Err(e) => crate::debug!("STAGE", "Controller {name} still away: {e}"),
+        }
     }
 
     fn alive(&self) {
