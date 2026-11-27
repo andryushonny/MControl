@@ -749,3 +749,38 @@ pub fn blocks(ui: &mut egui::Ui, frac: f32, width: f32, text: &str) {
     }
     ui.label(RichText::new(text).monospace());
 }
+
+/// A small notice in the corner of the map: the objective seems changed on the microscope, not here.
+pub fn objective_hint(app: &mut App, ctx: &egui::Context) {
+    let Some((text, suggest, at)) = app.objective_hint.clone() else { return };
+    if at.elapsed().as_secs() > 60 {
+        app.objective_hint = None;
+        return;
+    }
+    egui::Area::new(egui::Id::unique("objective_hint")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -70.0)).show(ctx, |ui| {
+        egui::Frame::popup(ui.style()).fill(Color32::from_rgb(60, 50, 20)).show(ui, |ui| {
+            ui.set_max_width(330.0);
+            ui.label(RichText::new(text).color(Color32::from_rgb(250, 220, 140)));
+            ui.horizontal(|ui| {
+                if let Some(o) = &suggest {
+                    if ui.button(format!("Switch to {o}")).clicked() {
+                        app.objective_changed(o);
+                        app.objective_hint = None;
+                    }
+                }
+                ui.label("On the microscope:");
+                let cur = app.proj.optics().objective.clone();
+                let names: Vec<String> = app.proj.objectives.iter().map(|o| o.objective.clone()).filter(|n| Some(n) != suggest.as_ref() && *n != cur).collect();
+                for n in &names {
+                    if ui.small_button(n).clicked() {
+                        app.objective_changed(n);
+                        app.objective_hint = None;
+                    }
+                }
+                if ui.small_button("No").on_hover_text("nothing was changed").clicked() {
+                    app.objective_hint = None;
+                }
+            });
+        });
+    });
+}

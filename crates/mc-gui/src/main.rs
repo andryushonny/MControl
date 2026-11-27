@@ -16,6 +16,7 @@ mod picture;
 mod pixels;
 mod project;
 mod scan;
+mod watch;
 
 use eframe::egui;
 use geom::P2;
@@ -106,6 +107,10 @@ pub struct App {
     pub auto_exposure: bool,
     /// the objective's remembered exposure was given to the camera on this connection
     pub cam_applied: bool,
+    /// watches the live picture for an objective turned on the microscope but not here
+    pub watch: watch::Watch,
+    /// the notice about it: (text, the objective to switch to, when)
+    pub objective_hint: Option<(String, Option<String>, Instant)>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -160,6 +165,8 @@ impl App {
             cam_edit: None,
             auto_exposure: false,
             cam_applied: false,
+            watch: watch::Watch::new(),
+            objective_hint: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -481,6 +488,19 @@ impl App {
         self.link.send(serde_json::json!({"cmd": "laser", "mw": mw}));
     }
 
+    fn watch_objective(&mut self) {
+        let live = self.link.state.lock().unwrap().live.as_ref().map(|l| (l.seq, l.rgb.clone(), l.xyz, l.moving));
+        let Some((seq, rgb, xyz, moving)) = live else { return };
+        let busy = !self.jobs.iter().all(|j| j.lock().unwrap().phase != scan::Phase::Scanning) || self.calib.is_some();
+        let now = self.proj.optics().clone();
+        if let Some(h) = self.watch.frame(seq, &rgb, xyz, moving, busy, &now, &self.proj.objectives) {
+            self.objective_hint = Some(match h {
+                watch::Hint::Objective(o) => (format!("The picture looks like {o} now, the program has {}.", now.objective), Some(o)),
+                watch::Hint::Changed => (format!("The picture changed while the stage stood still. Objective changed? The program has {}.", now.objective), None),
+            }).map(|(t, o)| (t, o, Instant::now()));
+        }
+    }
+
     /// Stop: the stage, the scan running (its frames so far are kept), and the queue pauses.
     pub fn stop_all(&mut self) {
         self.link.send(serde_json::json!({"cmd": "stop"}));
@@ -595,6 +615,7 @@ impl eframe::App for App {
         } else if !connected {
             self.cam_applied = false;
         }
+        self.watch_objective();
         self.run_queue();
         panels::top(self, ui);
         panels::status(self, ui);
@@ -606,6 +627,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::from_gray(24))).show(ui, |ui| map::show(self, ui));
         panels::settings(self, ui.ctx());
         panels::queue(self, ui.ctx());
+        panels::objective_hint(self, ui.ctx());
         if self.dirty {
             self.dirty = false;
             if let Err(e) = self.proj.save() {

@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.5.3
+- Objective changed on the microscope but not in the program: a notice in the corner of the map (the live picture changed while the stage stood still); when the picture matches another objective's scale, it names it and switches with one click.
 - A new selection goes to the top of the list; the list is the drawing priority, top drawn over the rest (map and DXF).
 
 ## 0.5.2
