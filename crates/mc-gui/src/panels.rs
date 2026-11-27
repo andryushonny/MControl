@@ -651,8 +651,9 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
             ui.label("Autofocus while scanning");
             ui.horizontal(|ui| {
+                let word = if app.proj.scan.autofocus { "on" } else { "off" };
                 changed |= ui
-                    .checkbox(&mut app.proj.scan.autofocus, if app.proj.scan.autofocus { "on" } else { "off" })
+                    .checkbox(&mut app.proj.scan.autofocus, word)
                     .on_hover_text("off: every frame at the z the scan began at, nothing searched or followed")
                     .changed();
                 ui.add_enabled_ui(app.proj.scan.autofocus, |ui| {
