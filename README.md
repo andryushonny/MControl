@@ -86,4 +86,4 @@ Each error is an `McError` with a `code`:
 cargo build --release                 # target/release/mc-server(.exe), mc-operator, mc-viewer
 python -m pytest tests                # integration tests on the simulator
 ```
-Windows binaries are built by GitHub Actions on every tag `v*`.
+Windows binaries are built by GitHub Actions on every push and attached to each published release.
