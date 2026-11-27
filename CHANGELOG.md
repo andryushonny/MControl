@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.1
+- Log: queued commands as `#n Snap ...`, with a capital after the number.
+
 ## 0.3.0
 - One queue on PC 1 for everything that changes the instrument: commands run one at a time in the order they came, each numbered `#n`; `stop` acts at once, ends the running chain and drops what waits (E116); reads are not queued.
 - Chains: `m.chain().goto(...).wait(ms).snap(...).run()` runs as one block, nothing between its steps.

@@ -849,15 +849,18 @@ impl Server {
             o.remove("step");
             if cmd == "chain" {
                 o.remove("steps"); // each step is reported on its own
+                o.remove("stop_on_error");
             }
         }
         let shown = cmd_args(&args);
+        // after the number the line still starts with a capital, like every other log line
+        let title: String = cmd.chars().take(1).flat_map(char::to_uppercase).chain(cmd.chars().skip(1)).collect();
         let by = paint(DIM, &format!("{ms:.0} ms  by {}", sess.name));
         let mut ev = json!({"n": n, "step": v["step"], "by": sess.name, "role": sess.role.name(), "cmd": cmd, "args": args,
                             "ms": ms.round(), "t_wall_ms": mc_proto::clock::wall_ms()});
         match r {
             Err(e) => {
-                crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{} {cmd} {shown}  {e}  {by}", paint(DIM, &tag_n)));
+                crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{} {title} {shown}  {e}  {by}", paint(DIM, &tag_n)));
                 ev["state"] = json!("failed");
                 ev["error"] = e.json();
             }
@@ -873,7 +876,7 @@ impl Server {
                     String::new()
                 };
                 let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
-                let line = [format!("{} {cmd} {shown}", paint(DIM, &tag_n)), if out.is_empty() { out.clone() } else { paint(BOLD, &out) }, by];
+                let line = [format!("{} {title} {shown}", paint(DIM, &tag_n)), if out.is_empty() { out.clone() } else { paint(BOLD, &out) }, by];
                 crate::log::log(level, cmd_tag(cmd), &line.iter().filter(|p| !p.trim().is_empty()).cloned().collect::<Vec<_>>().join("  "));
                 let mut result = r.clone();
                 if let Some(o) = result.as_object_mut() {
