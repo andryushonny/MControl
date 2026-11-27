@@ -370,6 +370,8 @@ impl App {
             self.calib = None;
             match r {
                 Ok(f) if self.calib_orientation => {
+                    // only the straight way it is turned or mirrored, and the scale: no small tilt
+                    let f = calib::Fit { m: geom::Optics::straight(f.m), ..f };
                     self.proj.optics_mut().m = f.m;
                     self.proj.optics_mut().profile_path = None;
                     let [a, b, c, d] = f.m;

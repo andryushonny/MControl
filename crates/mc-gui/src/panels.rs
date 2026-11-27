@@ -511,14 +511,20 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     app.thumbs.clear();
                     true
                 };
-                if ui.button("Turn 90°").on_hover_text("if the live picture moves 90° off when the stage moves").clicked() {
-                    changed |= apply([0.0, -1.0, 1.0, 0.0]);
+                if ui.button("Rotate 180").clicked() {
+                    changed |= apply([-1.0, 0.0, 0.0, -1.0]);
                 }
                 if ui.button("Mirror x").clicked() {
                     changed |= apply([-1.0, 0.0, 0.0, 1.0]);
                 }
                 if ui.button("Mirror y").clicked() {
                     changed |= apply([1.0, 0.0, 0.0, -1.0]);
+                }
+                if ui.button("Straight").on_hover_text("no tilt: the nearest straight orientation, the scale kept").clicked() {
+                    let m = crate::geom::Optics::straight(app.proj.optics().m);
+                    app.proj.optics_mut().m = m;
+                    app.thumbs.clear();
+                    changed = true;
                 }
                 if ui.button("View like the camera").on_hover_text("turn the map so the live picture stands as the camera sees it (frame horizontal)").clicked() {
                     // the stage direction of the picture's +x, made to point right on the screen
@@ -972,8 +978,8 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
                 app.thumbs.clear();
                 app.changed();
             };
-            if ui.button("Turn 90").clicked() {
-                apply(app, [0.0, -1.0, 1.0, 0.0]);
+            if ui.button("Rotate 180").clicked() {
+                apply(app, [-1.0, 0.0, 0.0, -1.0]);
             }
             if ui.button("Mirror x").clicked() {
                 apply(app, [-1.0, 0.0, 0.0, 1.0]);
@@ -981,7 +987,17 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
             if ui.button("Mirror y").clicked() {
                 apply(app, [1.0, 0.0, 0.0, -1.0]);
             }
+            if ui.button("Straight").on_hover_text("no tilt: the nearest straight orientation, the scale kept").clicked() {
+                let m = crate::geom::Optics::straight(app.proj.optics().m);
+                app.proj.optics_mut().m = m;
+                app.thumbs.clear();
+                app.changed();
+            }
         });
+        let [a, b, c, d] = app.proj.optics().m;
+        let ang = c.atan2(a).to_degrees();
+        let mirror = a * d - b * c < 0.0;
+        ui.label(RichText::new(format!("now: turned {ang:.1} deg{}, {:.4} um/px", if mirror { ", mirrored" } else { "" }, app.proj.optics().um_per_px())).monospace().size(11.0));
     });
     app.controls_open = open;
 }

@@ -169,6 +169,15 @@ impl Optics {
         serde_json::json!({"objective": self.objective, "m": self.m, "frame": self.frame, "repeatability_um": 5.0, "k": self.k})
     }
 
+    /// m without any small tilt: the nearest of the 8 straight ways (0/90/180/270 degrees, mirrored or not),
+    /// the scale kept.
+    pub fn straight(m: [f64; 4]) -> [f64; 4] {
+        let [a, b, c, d] = m;
+        let k = (a * d - b * c).abs().sqrt();
+        let r = |v: f64| if v.abs() < 0.5 * k { 0.0 } else { v.signum() * k };
+        if a.abs() + d.abs() >= b.abs() + c.abs() { [r(a), 0.0, 0.0, r(d)] } else { [0.0, r(b), r(c), 0.0] }
+    }
+
     pub fn um_per_px(&self) -> f64 {
         let [a, b, c, d] = self.m;
         1.0 / (a * d - b * c).abs().sqrt()
