@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.5
+- Z by hand: PageUp / PageDown (step in Settings, 5 um by default; Shift 1 um, Ctrl 20 um); x, y, z of the stage in the status bar.
+- *Focus* button: finds focus where the stage stands, as a scan does, and stays at the sharpest z (kept in surface.csv).
+
 ## 0.5.4
 - Crosses get no numbers of their own: the operator signs each with its X, Y; the lattice and the numbers of all squares appear once 2 crosses are signed.
 - The number in a square's top left corner is that corner cross's own number (it was the square's lower index); the same in the DXF and the square files. A lattice whose X runs up or down the screen is drawn as on the screen.

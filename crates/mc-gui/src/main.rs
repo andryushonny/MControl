@@ -113,6 +113,8 @@ pub struct App {
     pub objective_hint: Option<(String, Option<String>, Instant)>,
     /// X, Y being typed for crosses not signed yet (by cross index)
     pub label_edits: HashMap<usize, (String, String)>,
+    /// a focus search by hand, running (None) or done
+    pub focusing: Option<Arc<Mutex<Option<Result<(f64, f64, usize), String>>>>>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -170,6 +172,7 @@ impl App {
             watch: watch::Watch::new(),
             objective_hint: None,
             label_edits: HashMap::new(),
+            focusing: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -504,6 +507,31 @@ impl App {
         }
     }
 
+    /// Find focus here, as a scan does (the steps out to +-100 um, then finer), and stay there.
+    pub fn focus_here(&mut self) {
+        let Some(p) = self.link.stage_pos() else { return };
+        if self.focusing.as_ref().is_some_and(|f| f.lock().unwrap().is_none()) {
+            return;
+        }
+        let link = self.link.clone();
+        let s = focus::Settings { on: true, drop: 1.0, max_um: self.proj.scan.focus_max_um, settle_ms: self.proj.scan.settle_ms };
+        let dir = self.proj.path("focus");
+        let surface = Some(self.proj.path("surface.csv"));
+        let out = Arc::new(Mutex::new(None));
+        let o2 = out.clone();
+        std::thread::spawn(move || {
+            let mut f = focus::Focus::new(s, &dir, surface, "by hand");
+            let r = f.shot(&link, p[0], p[1], p[2], &|| false).map(|sh| (sh.z, sh.sharpness, sh.probes));
+            // the last probe may have been elsewhere in z: back to the sharpest
+            if let Ok((z, _, _)) = &r {
+                let _ = link.call(serde_json::json!({"cmd": "goto", "x": p[0], "y": p[1], "z": z}));
+            }
+            *o2.lock().unwrap() = Some(r);
+        });
+        self.focusing = Some(out);
+        self.message = "looking for focus...".into();
+    }
+
     /// Stop: the stage, the scan running (its frames so far are kept), and the queue pauses.
     pub fn stop_all(&mut self) {
         self.link.send(serde_json::json!({"cmd": "stop"}));
@@ -619,6 +647,16 @@ impl eframe::App for App {
             self.cam_applied = false;
         }
         self.watch_objective();
+        let done = self.focusing.as_ref().and_then(|f| f.lock().unwrap().take());
+        {
+            if let Some(r) = done {
+                self.message = match r {
+                    Ok((z, sh, n)) => format!("focus: z {z:.1} um, sharpness {sh:.2} ({n} frames tried)"),
+                    Err(e) => format!("focus: {e}"),
+                };
+                self.focusing = None;
+            }
+        }
         self.run_queue();
         panels::top(self, ui);
         panels::status(self, ui);

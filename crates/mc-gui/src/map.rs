@@ -217,6 +217,13 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
         app.link.send(json!({"cmd": "move", "dx": d[0], "dy": d[1]}));
         app.follow = true;
     }
+    // focus by hand: PageUp / PageDown move z (Shift: 1 um, Ctrl: 20 um, else the step in Settings)
+    for (k, sign) in [(Key::PageUp, 1.0), (Key::PageDown, -1.0)] {
+        if ui.input(|i| i.key_pressed(k)) && stage.is_some() {
+            let step = if shift { 1.0 } else if ctrl { 20.0 } else { app.proj.scan.z_step_um };
+            app.link.send(json!({"cmd": "move", "dz": sign * step}));
+        }
+    }
     if ui.input(|i| i.key_pressed(Key::Space)) {
         app.stop_all();
     }

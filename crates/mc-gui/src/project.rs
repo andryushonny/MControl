@@ -131,6 +131,13 @@ pub struct ScanSettings {
     /// how far up and down it may look, um
     #[serde(default = "focus_max")]
     pub focus_max_um: f64,
+    /// PageUp / PageDown move z by this much, um
+    #[serde(default = "z_step")]
+    pub z_step_um: f64,
+}
+
+fn z_step() -> f64 {
+    5.0
 }
 
 fn yes() -> bool {
@@ -145,7 +152,7 @@ fn focus_max() -> f64 {
 
 impl Default for ScanSettings {
     fn default() -> Self {
-        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_drop: 0.5, focus_max_um: 100.0 }
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
     }
 }
 
