@@ -13,7 +13,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ============================================================== worker process
 
@@ -57,7 +57,7 @@ pub fn worker_main(args: &[String]) -> ! {
         let d = dev.lock().unwrap();
         let (model, sn) = match &*d {
             Dev::Mv(c) => (c.name.clone(), c.sn.clone()),
-            Dev::Sim(s) => (format!("Simulated camera {}x{}", s.w, s.h), "SIM".into()),
+            Dev::Sim(_) => ("Simulated camera".to_string(), "SIM".into()),
         };
         let _ = write_json(&mut out, &json!({"event": "ready", "model": model, "serial": sn}));
         let _ = out.flush();
@@ -302,7 +302,9 @@ impl Camera {
                             i["w"] = hdr["w"].clone();
                             i["h"] = hdr["h"].clone();
                             i["fmt"] = hdr["fmt"].clone();
-                            info!("CAM", "Streaming {}x{} {}", hdr["w"], hdr["h"], hdr["fmt"].as_str().unwrap_or("?"));
+                            // one line per camera start: what it is and what it sends
+                            info!("CAM", "Camera {} (serial {}) {}x{} {}, in its own process", i["model"].as_str().unwrap_or("?"),
+                                i["serial"].as_str().unwrap_or("?"), hdr["w"], hdr["h"], hdr["fmt"].as_str().unwrap_or("?"));
                         }
                         on_frame(CamFrame { hdr, px: px.to_vec() });
                     }
@@ -313,7 +315,7 @@ impl Camera {
                             let mut i = self.info.lock().unwrap();
                             i["model"] = v["model"].clone();
                             i["serial"] = v["serial"].clone();
-                            info!("CAM", "Camera {} (serial {}) opened in its own process", v["model"].as_str().unwrap_or("?"), v["serial"].as_str().unwrap_or("?"));
+                            crate::debug!("CAM", "Camera {} opened", v["model"].as_str().unwrap_or("?"));
                             last_fatal.clear();
                         }
                         Some("fatal") => {
@@ -352,8 +354,21 @@ impl Camera {
         }
     }
 
+    /// Camera up, or wait for it while the worker starts or restarts (at most `ms`).
+    pub fn wait_ok(&self, ms: u64) -> McResult<()> {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while !self.ok.load(Ordering::Relaxed) {
+            if Instant::now() > end {
+                return Err(McError::new("E500", ""));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
     /// Send a command to the worker, wait for its reply.
     pub fn cmd(&self, mut v: Value) -> McResult<Value> {
+        self.wait_ok(3000)?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         v["id"] = json!(id);
         let (tx, rx) = channel();

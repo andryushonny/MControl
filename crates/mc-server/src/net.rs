@@ -3,7 +3,7 @@
 
 use crate::camera::Camera;
 use crate::frames::{Frame, Hub, Outbox, Want};
-use crate::log::{paint, rate, BLUE, BOLD, DIM, GREEN, RED};
+use crate::log::{paint, rate, Level, BLUE, BOLD, DIM, GREEN};
 use crate::stage::Stage;
 use mc_proto::clock::now_ns;
 use mc_proto::errors::{McError, McResult};
@@ -172,14 +172,14 @@ impl Server {
                 if h.alive.load(Ordering::Relaxed) {
                     let e = McError::new("E103", format!("{} ({})", h.name, h.addr.ip()));
                     sess.send(&err(&id, &e));
-                    warn!("NET", "refused {}: {} holds the microscope", sess.who(), h.name);
+                    warn!("NET", "{}  refused: {} holds the microscope", sess.who(), h.name);
                     return;
                 }
             }
             *l = Some(sess.clone());
         }
         self.sessions.lock().unwrap().push(sess.clone());
-        info!("NET", "{} {}  connected (control)", paint(GREEN, "+"), sess.who());
+        info!("NET", "{}  connected", sess.who());
         sess.send(&ok(&id, json!({"session": sess.id, "role": if role == Role::Operator { "operator" } else { "viewer" },
             "server": self.info(), "t_server": now_ns()})));
         if role == Role::Operator {
@@ -227,7 +227,7 @@ impl Server {
                 false
             }
         };
-        info!("NET", "{} {}  {} after {:.0} s", paint(RED, "-"), sess.who(), why, (now_ns() - sess.since) as f64 / 1e9);
+        info!("NET", "{}  {} after {:.0} s", sess.who(), why, (now_ns() - sess.since) as f64 / 1e9);
         if was_op {
             self.safe_stop("operator gone");
             self.broadcast(&json!({"event": "operator", "name": null}));
@@ -240,7 +240,7 @@ impl Server {
         let st = self.stage.clone();
         let laser = st.shared.lock().unwrap().laser;
         if laser > 0 || st.shared.lock().unwrap().moving {
-            warn!("STAGE", "{why}: stopping the stage, laser off");
+            warn!("STAGE", "{why}: stage stopped, laser off");
         }
         std::thread::spawn(move || {
             let _ = st.call(|w| {
@@ -323,7 +323,7 @@ impl Server {
         }
         if cmd == "stop" {
             self.stage.stop();
-            warn!("STAGE", "STOP from {}", sess.who());
+            warn!("STAGE", "Stop by {}", sess.name);
             sess.send(&ok(&id, json!({})));
             return;
         }
@@ -341,11 +341,11 @@ impl Server {
             let r = s.run_cmd(&sess, &cmd, &v);
             match r {
                 Ok(x) => {
-                    log_done(&sess, &cmd, &v, &x, (now_ns() - t0) as f64 / 1e6);
+                    log_cmd(&sess, &cmd, &v, Ok(&x), (now_ns() - t0) as f64 / 1e6);
                     sess.send(&ok(&id, x))
                 }
                 Err(e) => {
-                    warn!("NET", "{} {}: {}", sess.who(), cmd, e);
+                    log_cmd(&sess, &cmd, &v, Err(&e), (now_ns() - t0) as f64 / 1e6);
                     sess.send(&err(&id, &e));
                 }
             }
@@ -408,9 +408,7 @@ impl Server {
         } else if d.iter().any(|a| a.is_some()) {
             self.stage.call(move |w| w.move_by(d, gen))?;
         }
-        if !self.cam.ok.load(Ordering::Relaxed) {
-            return Err(McError::new("E500", ""));
-        }
+        self.cam.wait_ok(3000)?;
         let settle = f3(v, "settle_ms").unwrap_or(0.0).max(0.0);
         let t_ready = self.stage.shared.lock().unwrap().settled_ns.max(now_ns()) + (settle * 1e6) as u64;   // a fresh frame, taken still
         let timeout = Duration::from_millis(f3(v, "timeout_ms").unwrap_or(5000.0).max(0.0) as u64);
@@ -474,7 +472,7 @@ impl Server {
         let _ = write_json(&mut w, &json!({"ok": true}));
         use std::io::Write;
         let _ = w.flush();
-        info!("DATA", "{} {}  {}", paint(GREEN, "→"), sess.who(), if raw { "full RAW stream" } else { "preview stream" });
+        crate::debug!("DATA", "{} data link: {}", sess.who(), if raw { "full RAW stream" } else { "preview stream" });
         let _ = addr;
         while let Some((f, preview, reliable)) = ob.next() {
             if !sess.alive.load(Ordering::Relaxed) {
@@ -499,7 +497,7 @@ impl Server {
         }
         self.hub.remove(&ob);
         ob.close();
-        info!("DATA", "{} {}  stream closed", paint(RED, "×"), sess.who());
+        crate::debug!("DATA", "{} data link closed", sess.who());
     }
 
     // ---------------------------------------------------------------- background
@@ -510,7 +508,7 @@ impl Server {
             if let Some(h) = self.holder() {
                 let silent = (now_ns() - h.last_seen.load(Ordering::Relaxed)) / 1_000_000;
                 if silent > self.cfg.dead_ms {
-                    error!("NET", "{} silent for {} ms: E105 stage stopped, laser off, control released", h.who(), silent);
+                    error!("NET", "{}  silent for {} ms: E105 control released", h.who(), silent);
                     h.send(&json!({"event": "error", "error": McError::new("E105", format!("{silent} ms")).json()}));
                     *self.lease.lock().unwrap() = None;
                     self.safe_stop("operator silent");
@@ -567,15 +565,28 @@ impl Server {
     }
 }
 
-/// One line per finished operator command: what was asked, what came out, how long it took.
-fn log_done(sess: &Session, cmd: &str, v: &Value, r: &Value, ms: f64) {
+fn cmd_args(v: &Value) -> String {
+    v.as_object()
+        .map(|o| o.iter().filter(|(k, _)| !matches!(k.as_str(), "cmd" | "id")).map(|(k, x)| format!("{k}={x}")).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+fn cmd_tag(cmd: &str) -> &'static str {
+    if matches!(cmd, "exposure" | "gain" | "auto_exposure" | "white_balance") { "CAM" } else { "STAGE" }
+}
+
+/// One line per finished operator command, in one shape: what was asked, what came out (or the error), how long, by whom.
+fn log_cmd(sess: &Session, cmd: &str, v: &Value, r: Result<&Value, &McError>, ms: f64) {
+    let r = match r {
+        Ok(x) => x,
+        Err(e) => {
+            crate::log::log(Level::Warn, cmd_tag(cmd), &format!("{cmd} {}  {e}  {}", cmd_args(v), paint(DIM, &format!("by {}", sess.name))));
+            return;
+        }
+    };
     if matches!(cmd, "camera_state" | "temperature") {
         return; // reads, not actions
     }
-    let args: Vec<String> = v
-        .as_object()
-        .map(|o| o.iter().filter(|(k, _)| !matches!(k.as_str(), "cmd" | "id")).map(|(k, x)| format!("{k}={x}")).collect())
-        .unwrap_or_default();
     let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
     let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
         format!("at ({p})")
@@ -584,8 +595,10 @@ fn log_done(sess: &Session, cmd: &str, v: &Value, r: &Value, ms: f64) {
     } else {
         String::new()
     };
-    let tag = if matches!(cmd, "exposure" | "gain" | "auto_exposure" | "white_balance") { "CAM" } else { "STAGE" };
-    info!(tag, "{cmd} {}  {}  {}  {}", args.join(" "), paint(BOLD, &out), paint(DIM, &format!("{ms:.0} ms")), paint(DIM, &format!("by {}", sess.name)));
+    let tag = cmd_tag(cmd);
+    let level = if cmd == "laser" && v["mw"].as_f64().unwrap_or(0.0) > 0.0 { Level::Warn } else { Level::Info }; // laser on stands out
+    let parts = [format!("{cmd} {}", cmd_args(v)), if out.is_empty() { out } else { paint(BOLD, &out) }, paint(DIM, &format!("{ms:.0} ms  by {}", sess.name))];
+    crate::log::log(level, tag, &parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join("  "));
 }
 
 /// Build a frame from the worker's header: number it and add where the stage was during the exposure.

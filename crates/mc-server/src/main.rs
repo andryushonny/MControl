@@ -86,7 +86,7 @@ fn main() {
         }
         let mut found = None;
         for p in &ports {
-            info!("STAGE", "trying {p} ...");
+            info!("STAGE", "Trying {p}");
             match stage::Stage::open(p, cfg.clone()) {
                 Ok(s) => {
                     found = Some(s);
@@ -202,7 +202,6 @@ fn main() {
     println!("  {}  {}  {}", paint(DIM, "Control   "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.control_port)), paint(DIM, "Commands, replies, events"));
     println!("  {}  {}  {}", paint(DIM, "Data      "), paint(CYAN, &format!("tcp://{ip}:{}", ncfg.data_port)), paint(DIM, "Frames"));
     println!("  {}  {}  {}", paint(DIM, "Discovery "), paint(CYAN, &format!("udp {}", mc_proto::DISCOVERY_PORT)), paint(DIM, "Clients find the server by themselves"));
-    println!("  {}  {}", paint(DIM, "Controller"), st.port);
     println!("  {}  {}", paint(DIM, "Laser     "), if cfg.allow_laser { paint(YELLOW, "Allowed") } else { "Blocked (--allow-laser to allow)".into() });
     println!("  {}  {}", paint(DIM, "Stop      "), paint(GREEN, "Ctrl+C: stage stops, laser, motors and light off"));
     println!();
@@ -220,7 +219,6 @@ fn main() {
     // ---- Ctrl+C: safe state, tell the guard, leave
     let (st2, cam2) = (st.clone(), cam.clone());
     let _ = ctrlc::set_handler(move || {
-        warn!("SRV", "closing: stage stop, laser, motors, light off");
         st2.stop();
         let _ = st2.call(|w| {
             w.safe_off("server closing");
@@ -230,7 +228,7 @@ fn main() {
         if let Ok(s) = UdpSocket::bind("127.0.0.1:0") {
             let _ = s.send_to(b"bye", ("127.0.0.1", hb_port));
         }
-        info!("SRV", "bye");
+        info!("SRV", "Stopped");
         std::process::exit(0);
     });
 

@@ -44,7 +44,7 @@ pub fn guard_main(args: &[String]) -> ! {
             break;
         }
     }
-    error!("GUARD", "E600 server silent for {:.1} s: killing it, then laser off, motors off, light off", (now_ns() - last) as f64 / 1e9);
+    error!("GUARD", "E600 server silent for {:.1} s: stopping it", (now_ns() - last) as f64 / 1e9);
     kill(pid);
     std::thread::sleep(Duration::from_millis(500));
     for attempt in 0..10 {
@@ -52,11 +52,11 @@ pub fn guard_main(args: &[String]) -> ! {
             Ok(mut c) => {
                 for (cmd, data) in [(C::LASER, vec![0u8, 0]), (C::TURN_MOTOR, vec![0]), (C::LIGHT, vec![0, 0])] {
                     match c.cmd(cmd, &data, 1000) {
-                        Ok(_) => info!("GUARD", "{} off", C::name(cmd)),
+                        Ok(_) => crate::debug!("GUARD", "{} off", C::name(cmd)),
                         Err(e) => error!("GUARD", "{}: {e}", C::name(cmd)),
                     }
                 }
-                info!("GUARD", "safe state set. Start mc-server again.");
+                info!("GUARD", "Safe state set: laser, motors and light off. Start mc-server again");
                 std::process::exit(0);
             }
             Err(e) => {

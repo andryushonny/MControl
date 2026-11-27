@@ -413,7 +413,6 @@ impl Worker {
         s.origin = s.steps;
         drop(s);
         self.persist(false);
-        info!("STAGE", "Zero set here");
         Ok(self.shared.lock().unwrap().json())
     }
 
@@ -443,12 +442,7 @@ impl Worker {
             }
         }
         self.ctl.cmd(C::LASER, &(mw as u16).to_be_bytes(), 1000)?;
-        self.shared.lock().unwrap().laser = mw;
-        if mw > 0 {
-            warn!("STAGE", "LASER ON: {mw} mW");
-        } else {
-            info!("STAGE", "Laser off");
-        }
+        self.shared.lock().unwrap().laser = mw; // logged by the command log (or by whoever switched it off)
         Ok(json!({"laser_mw": mw}))
     }
 
@@ -493,7 +487,7 @@ impl Worker {
         s.cooling = false;
         drop(s);
         self.persist(false);
-        info!("STAGE", "Safe state ({why}): laser off, motors off, light off");
+        info!("STAGE", "Safe state ({why}): laser, motors and light off");
     }
 
     pub fn laser_off_now(&mut self) {
