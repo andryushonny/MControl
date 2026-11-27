@@ -32,7 +32,7 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
 ```
 git clone https://github.com/andryushonny/MControl && cd MControl
 uv sync                                    # .venv with mcontrol + numpy, pillow, jupyter, pytest
-uv run jupyter lab examples/basics.ipynb   # the walk-through
+uv run jupyter lab example.ipynb            # the walk-through
 uv run python my_script.py                 # your own scripts
 ```
 To use it from another uv project: `uv add "mcontrol @ git+https://github.com/andryushonny/MControl"`.
@@ -47,7 +47,7 @@ with Microscope() as m:                 # finds the server on the LAN, remembers
     img = f.rgb()                          # numpy HxWx3 (f.raw() = sensor data)
     f.save("tile.png")                     # + tile.json with all metadata
 ```
-The full walk-through is in [`examples/basics.ipynb`](examples/basics.ipynb): stage, light, camera, snap, grid scan, live stream, events, viewers, errors.
+The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, camera, snap, grid scan, live stream, events, viewers, errors.
 
 ## How it works
 

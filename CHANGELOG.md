@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.2
+- The Python package lives in `mcontrol/` at the top of the repository and the walk-through is `example.ipynb` next to it, so `from mcontrol import Microscope` works in a notebook opened there, also without installing.
+
 ## 0.2.1
 - PC 1 keeps its devices while the server runs: the controller is checked every 2 s when idle and reopened if it went away (light and motors given back, laser stays off); a camera that stops giving frames is opened again with the operator's exposure and gain; Windows does not go to sleep.
 

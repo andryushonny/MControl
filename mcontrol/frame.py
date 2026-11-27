@@ -122,7 +122,10 @@ def unpack(meta: dict, data: bytes) -> np.ndarray:
     if codec == "raw":
         return np.frombuffer(data, dtype=dt).reshape(h, w)
     if codec == "lossless":
-        import zstandard
+        try:
+            import zstandard
+        except ImportError:
+            raise ImportError("lossless frames need the zstandard package: uv sync, or pip install zstandard") from None
         d = np.frombuffer(zstandard.ZstdDecompressor().decompress(data, max_output_size=meta["raw_bytes"]), dtype=dt).reshape(h, w)
         out = np.empty_like(d)
         for c in range(min(2, w)):              # first two columns: difference to two rows up

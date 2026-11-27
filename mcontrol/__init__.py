@@ -11,4 +11,4 @@ from .events import describe
 from .microscope import Microscope, Viewer
 
 __all__ = ["Microscope", "Viewer", "Frame", "McError", "describe"]
-__version__ = "0.2.1"
+__version__ = "0.2.2"
