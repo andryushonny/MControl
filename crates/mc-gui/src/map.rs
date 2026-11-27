@@ -237,12 +237,12 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     }
     let mut d = [0.0, 0.0];
     for (k, dx, dy) in [(Act::Left, -1.0, 0.0), (Act::Right, 1.0, 0.0), (Act::Up, 0.0, -1.0), (Act::Down, 0.0, 1.0)] {
-        // the arrows as set in Settings: exchanged, reversed
-        // the arrows as set in Controls: exchanged, reversed (the picture stays as it is)
-        // swap: up moves as right did, down as left, right as up, left as down (screen y grows down)
-        let (dx, dy) = if app.arrow_swap { (-dy, -dx) } else { (dx, dy) };
+        // the arrows as set in Controls (the picture stays as it is). First the keys exchanged: with "left with
+        // right" the right key does what the left one did, with "up with down" likewise; then swap: up moves
+        // as right did, down as left, right as up, left as down (screen y grows down)
         let dx = if app.arrow_rev_x { -dx } else { dx };
         let dy = if app.arrow_rev_y { -dy } else { dy };
+        let (dx, dy) = if app.arrow_swap { (-dy, -dx) } else { (dx, dy) };
         if let Some([r, u]) = app.arrow_dirs {
             // taught arrows: right / up as the operator sees the stage, whatever the screen shows
             if app.keys.pressed(ui, k) {

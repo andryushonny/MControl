@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.8
+- Controls, the arrows: *left with right* and *up with down* together with *swap* work as named: first the keys are exchanged (the right key does what the left one did), then swapped. Before, with *swap* on, *left with right* changed the up / down keys instead.
+
 ## 0.6.7
 - *Controls, From a corner of the substrate*: put a corner on the crosshair and say which it is as you see the substrate (top / bottom, left / right). Three frames (here, a little along x, along y) give the camera's orientation against the stage (which of the 8 straight ways the frames agree with; the corner's edges are enough, no texture needed) and where the substrate is from the corner; its two edges are drawn red and blue on the map, you say which runs left-right for you. Then the screen is turned / mirrored to show the substrate as you see it, and the arrows are set the same way: they move the view (default) or the stage itself (a choice there).
 
