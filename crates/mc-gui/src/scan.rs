@@ -454,7 +454,7 @@ mod e2e_lens {
         // 1. the optics, by the stage
         link.call(json!({"cmd": "goto", "x": 1030.0, "y": 1040.0})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let c = crate::calib::start(link.clone(), proj.optics().clone(), 50.0, 20.0);
+        let c = crate::calib::start(link.clone(), proj.optics().clone(), 50.0, 20.0, false);
         let fit = loop {
             if let Some(r) = c.lock().unwrap().result.clone() {
                 break r.unwrap();

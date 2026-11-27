@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.7
+- Top bar, *Calibrate* menu: **Orientation** (3 frames: how the camera is turned or mirrored against the stage, and its scale; the distortion kept), **Distortion** (9 frames: k1, k2 with orientation and scale), **White balance** (the live picture made grey).
+
 ## 0.5.6
 - Z also on the . and , keys (> and < on them); the step is set in Settings, Shift makes it five times larger.
 - Settings: *swap x and y* beside the mirrors, so the map can be laid out as the stage stands in front of you (any of the 8 ways together with the mirrors); arrows and everything else follow.

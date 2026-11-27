@@ -38,23 +38,26 @@ pub struct Match {
     pub d_um: P2,
 }
 
-pub fn start(link: Arc<Link>, optics: Optics, settle_ms: f64, back_um: f64) -> Arc<Mutex<Calib>> {
-    let st = Arc::new(Mutex::new(Calib { phase: "taking frames".into(), done: 0, total: 9, stop: false, result: None }));
+/// `orientation_only`: 3 frames, the camera's turn / mirror and scale (m), the distortion left as it is;
+/// else 9 frames, m and the distortion.
+pub fn start(link: Arc<Link>, optics: Optics, settle_ms: f64, back_um: f64, orientation_only: bool) -> Arc<Mutex<Calib>> {
+    let st = Arc::new(Mutex::new(Calib { phase: "taking frames".into(), done: 0, total: if orientation_only { 3 } else { 9 }, stop: false, result: None }));
     let s2 = st.clone();
     std::thread::spawn(move || {
-        let r = run(&link, &optics, settle_ms, back_um, &s2);
+        let r = run(&link, &optics, settle_ms, back_um, orientation_only, &s2);
         s2.lock().unwrap().result = Some(r);
     });
     st
 }
 
-fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Calib>) -> Result<Fit, String> {
+fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &Mutex<Calib>) -> Result<Fit, String> {
     let here = link.stage_pos().ok_or("no stage position yet")?;
     let f = o.field_um();
     let (sx, sy) = (0.3 * f[0], 0.3 * f[1]);
     let mut spots = vec![[0.0, 0.0]];
-    for (i, j) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
-        spots.push([i as f64 * sx, j as f64 * sy]);
+    let around: &[(i32, i32)] = if quick { &[(1, 0), (0, 1)] } else { &[(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] };
+    for (i, j) in around {
+        spots.push([*i as f64 * sx, *j as f64 * sy]);
     }
     let mut frames = vec![];
     link.call(json!({"cmd": "begin"}))?;
@@ -81,8 +84,9 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Calib>)
     let ((g0, w, h), at0) = &frames[0];
     let (w, h) = (w, h);
     // the camera may be turned or mirrored against the stage: which of the 8 ways do the frames agree with?
-    let pairs: Vec<(&[f32], P2)> = [5usize, 7].iter().map(|&k| (frames[k].0 .0.as_slice(), [frames[k].1[0] - at0[0], frames[k].1[1] - at0[1]])).collect();
+    let pairs: Vec<(&[f32], P2)> = (if quick { [1usize, 2] } else { [5usize, 7] }).iter().map(|&k| (frames[k].0 .0.as_slice(), [frames[k].1[0] - at0[0], frames[k].1[1] - at0[1]])).collect();
     let m = orientation(g0, &pairs, *w, *h, o);
+    let o_in = o;
     let o = &Optics { m, k: [0.0, 0.0], ..o.clone() };
     st.lock().unwrap().phase = "matching".into();
     let mut ms = vec![];
@@ -90,8 +94,15 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Calib>)
         let d = [at1[0] - at0[0], at1[1] - at0[1]];
         ms.extend(match_frames(g0, g1, *w, *h, o, d));
     }
-    if ms.len() < 30 {
+    if ms.len() < if quick { 10 } else { 30 } {
         return Err(format!("only {} features matched: calibrate on a spot with more texture", ms.len()));
+    }
+    if quick {
+        // the turn / mirror found; m (scale and the exact turn) fitted, the lens's distortion kept as it was
+        let keep = Optics { k: o_in.k, ..o.clone() };
+        let (m, sse) = solve_m(&ms, &keep);
+        let rms = (sse / ms.len() as f64).sqrt();
+        return Ok(Fit { m, k: o_in.k, rms_plain_px: rms, rms_px: rms, matches: ms.len() });
     }
     st.lock().unwrap().phase = "fitting".into();
     #[cfg(test)]

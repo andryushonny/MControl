@@ -93,6 +93,7 @@ pub struct App {
     pub jobs: Vec<Arc<Mutex<scan::Job>>>,
     pub export: Option<Arc<Mutex<ExportState>>>,
     pub calib: Option<Arc<Mutex<calib::Calib>>>,
+    pub calib_orientation: bool,
     /// scans waiting, grouped by objective (the current one first)
     pub queue: Vec<Task>,
     pub paused: bool,
@@ -162,6 +163,7 @@ impl App {
             jobs: vec![],
             export: None,
             calib: None,
+            calib_orientation: false,
             queue: vec![],
             paused: false,
             wait_objective: None,
@@ -266,8 +268,29 @@ impl App {
         self.changed();
     }
 
-    pub fn start_calibration(&mut self) {
-        self.calib = Some(calib::start(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um));
+    /// `orientation_only`: the camera's turn / mirror and scale (3 frames); else also the distortion (9 frames).
+    pub fn start_calibration(&mut self, orientation_only: bool) {
+        self.calib_orientation = orientation_only;
+        self.calib = Some(calib::start(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um, orientation_only));
+    }
+
+    /// White balance from the live picture: its average made grey.
+    pub fn auto_white(&mut self) {
+        let mean = self.live_pic.as_ref().and_then(|(_, p)| {
+            let b = p.pyr.base();
+            b.mean(0, 0, b.w, b.h)
+        });
+        match mean {
+            Some(c) if c.iter().all(|v| *v > 8.0) => {
+                let wb = self.proj.wb;
+                let grey = (c[0] + c[1] + c[2]) / 3.0;
+                let g = [wb[0] * grey / c[0], wb[1] * grey / c[1], wb[2] * grey / c[2]];
+                let g = g.map(|v| v / g[1]);
+                self.set_white(g);
+                self.message = format!("white balance R {:.3}  G 1  B {:.3} (from the live picture)", g[0], g[2]);
+            }
+            _ => self.message = "white balance: no live picture (or too dark)".into(),
+        }
     }
 
     fn poll_calibration(&mut self) {
@@ -276,6 +299,17 @@ impl App {
         if let Some(r) = r {
             self.calib = None;
             match r {
+                Ok(f) if self.calib_orientation => {
+                    self.proj.optics_mut().m = f.m;
+                    self.proj.optics_mut().profile_path = None;
+                    let [a, b, c, d] = f.m;
+                    let mirror = a * d - b * c < 0.0;
+                    let ang = c.atan2(a).to_degrees();
+                    self.message = format!("orientation: camera turned {ang:.1} deg{} against the stage, {:.4} um/px ({} features)",
+                        if mirror { ", mirrored" } else { "" }, self.proj.optics().um_per_px(), f.matches);
+                    self.thumbs.clear();
+                    self.changed();
+                }
                 Ok(f) => {
                     self.proj.optics_mut().m = f.m;
                     self.proj.optics_mut().k = f.k;

@@ -43,6 +43,22 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: . and , keys (Shift: x5)").clicked() {
                 app.focus_here();
             }
+            ui.menu_button("Calibrate", |ui| {
+                let can = app.calib.is_none() && app.link.stage_pos().is_some();
+                ui.label(RichText::new(format!("for {}, on a spot with texture (no repeating pattern)", app.proj.optics().objective)).weak().size(11.5));
+                if ui.add_enabled(can, egui::Button::new("Orientation")).on_hover_text("3 frames: how the camera is turned or mirrored against the stage, and its scale").clicked() {
+                    app.start_calibration(true);
+                    ui.close();
+                }
+                if ui.add_enabled(can, egui::Button::new("Distortion")).on_hover_text("9 frames: the lens's distortion k1, k2 (and the orientation and scale again)").clicked() {
+                    app.start_calibration(false);
+                    ui.close();
+                }
+                if ui.button("White balance").on_hover_text("the live picture's average made grey; for a spot of your choice: Settings, Pick grey").clicked() {
+                    app.auto_white();
+                    ui.close();
+                }
+            });
             if ui.button("Follow (F)").clicked() {
                 app.follow = true;
             }
@@ -512,7 +528,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     .on_hover_text("9 frames of this spot, the stage moved by a third of the field between them: scale, turn and lens distortion. Needs texture in the field.")
                     .clicked()
                 {
-                    app.start_calibration();
+                    app.start_calibration(false);
                 }
                 if let Some(c) = &app.calib {
                     let c = c.lock().unwrap();
@@ -539,19 +555,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     app.message = "click on something that should be grey or white".into();
                 }
                 if ui.button("Auto (live)").on_hover_text("grey world: the live picture's average made grey").clicked() {
-                    let mean = app.live_pic.as_ref().and_then(|(_, p)| {
-                        let b = p.pyr.base();
-                        b.mean(0, 0, b.w, b.h)
-                    });
-                    match mean {
-                        Some(c) if c.iter().all(|v| *v > 8.0) => {
-                            let wb = app.proj.wb;
-                            let grey = (c[0] + c[1] + c[2]) / 3.0;
-                            let g = [wb[0] * grey / c[0], wb[1] * grey / c[1], wb[2] * grey / c[2]];
-                            app.set_white(g.map(|v| v / g[1]));
-                        }
-                        _ => app.message = "no live picture to balance on".into(),
-                    }
+                    app.auto_white();
                 }
                 if ui.button("Off").clicked() {
                     app.set_white([1.0, 1.0, 1.0]);
