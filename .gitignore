@@ -11,3 +11,4 @@ mc-server-state.json
 .ipynb_checkpoints/
 .pytest_cache/
 snap.*
+.venv/

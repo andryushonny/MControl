@@ -337,9 +337,13 @@ impl Server {
         let s = self.clone();
         let sess = sess.clone();
         std::thread::spawn(move || {
+            let t0 = now_ns();
             let r = s.run_cmd(&sess, &cmd, &v);
             match r {
-                Ok(x) => sess.send(&ok(&id, x)),
+                Ok(x) => {
+                    log_done(&sess, &cmd, &v, &x, (now_ns() - t0) as f64 / 1e6);
+                    sess.send(&ok(&id, x))
+                }
                 Err(e) => {
                     warn!("NET", "{} {}: {}", sess.who(), cmd, e);
                     sess.send(&err(&id, &e));
@@ -354,12 +358,10 @@ impl Server {
         match cmd {
             "move" => {
                 let d = xyz("dx", "dy", "dz");
-                info!("STAGE", "move {} by {}", fmt_xyz(&d), sess.name);
                 self.stage.call(move |w| w.move_by(d, gen))
             }
             "goto" => {
                 let t = xyz("x", "y", "z");
-                info!("STAGE", "goto {} by {}", fmt_xyz(&t), sess.name);
                 self.stage.call(move |w| w.move_to(t, gen))
             }
             "snap" => self.snap(sess, v, gen),
@@ -411,7 +413,7 @@ impl Server {
         }
         let settle = f3(v, "settle_ms").unwrap_or(0.0).max(0.0);
         let t_ready = self.stage.shared.lock().unwrap().settled_ns.max(now_ns()) + (settle * 1e6) as u64;   // a fresh frame, taken still
-        let timeout = Duration::from_millis(v["timeout_ms"].as_u64().unwrap_or(5000));
+        let timeout = Duration::from_millis(f3(v, "timeout_ms").unwrap_or(5000.0).max(0.0) as u64);
         let f = self.hub.wait_after(t_ready, timeout).ok_or_else(|| McError::new("E505", "no frame after the stage settled"))?;
         if let Some(ob) = sess.outbox.lock().unwrap().clone() {
             ob.push_reliable(f.clone(), false);
@@ -565,13 +567,25 @@ impl Server {
     }
 }
 
-fn fmt_xyz(v: &[Option<f64>; 3]) -> String {
-    ["x", "y", "z"]
-        .iter()
-        .zip(v)
-        .filter_map(|(k, x)| x.map(|x| format!("{k} {x:.1}")))
-        .collect::<Vec<_>>()
-        .join(" ")
+/// One line per finished operator command: what was asked, what came out, how long it took.
+fn log_done(sess: &Session, cmd: &str, v: &Value, r: &Value, ms: f64) {
+    if matches!(cmd, "camera_state" | "temperature") {
+        return; // reads, not actions
+    }
+    let args: Vec<String> = v
+        .as_object()
+        .map(|o| o.iter().filter(|(k, _)| !matches!(k.as_str(), "cmd" | "id")).map(|(k, x)| format!("{k}={x}")).collect())
+        .unwrap_or_default();
+    let xyz = |a: &Value| a.as_array().map(|p| p.iter().map(|x| format!("{:.1}", x.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", "));
+    let out = if let Some(p) = r.get("pos_um").and_then(xyz) {
+        format!("at ({p})")
+    } else if let Some(seq) = r.get("seq") {
+        format!("frame {seq} at ({})", xyz(&r["meta"]["xyz_um"]).unwrap_or_default())
+    } else {
+        String::new()
+    };
+    let tag = if matches!(cmd, "exposure" | "gain" | "auto_exposure" | "white_balance") { "CAM" } else { "STAGE" };
+    info!(tag, "{cmd} {}  {}  {}  {}", args.join(" "), paint(BOLD, &out), paint(DIM, &format!("{ms:.0} ms")), paint(DIM, &format!("by {}", sess.name)));
 }
 
 /// Build a frame from the worker's header: number it and add where the stage was during the exposure.

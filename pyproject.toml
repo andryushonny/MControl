@@ -1,0 +1,21 @@
+[project]
+name = "mcontrol"
+version = "0.1.0"
+description = "Python client for mc-server: Optosky ATR8300 stage + MindVision camera over the LAN"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy", "pillow"]
+
+[dependency-groups]
+dev = ["pytest", "matplotlib", "jupyterlab", "ipykernel"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["mcontrol"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

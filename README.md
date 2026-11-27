@@ -21,7 +21,7 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
 ## Quick start
 
 **Microscope PC (Windows 10)**
-1. Install the MindVision SDK (`MindVision Platform Setup`, <https://www.mindvision.com.cn>). It goes to `C:\Program Files\MindVision\SDK`.
+1. Install the MindVision SDK (`MindVision Platform Setup`, <https://www.mindvision.com.cn>).
 2. Close the Optosky software: it holds the COM port and the camera.
 3. Download `mc-server.exe` from [Releases](../../releases) and run it:
    ```
@@ -32,10 +32,16 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
    ```
    Ctrl+C stops it. Before exiting it stops the stage and switches off the laser, motors and light.
 
-**Operator PC**
+   ![mc-server log](docs/server-log.png)
+
+**Operator PC** (with [uv](https://docs.astral.sh/uv/))
 ```
-pip install -e python          # numpy; add pillow + matplotlib for pictures
+git clone https://github.com/andryushonny/MControl && cd MControl
+uv sync                                    # .venv with mcontrol + numpy, pillow, jupyter, pytest
+uv run jupyter lab examples/basics.ipynb   # the walk-through
+uv run python my_script.py                 # your own scripts
 ```
+To use it from another uv project: `uv add "mcontrol @ git+https://github.com/andryushonny/MControl"`.
 ```python
 from mcontrol import Microscope
 
@@ -84,6 +90,6 @@ Each error is an `McError` with a `code`:
 ## Build and test
 ```
 cargo build --release                 # target/release/mc-server(.exe), mc-operator, mc-viewer
-python -m pytest tests                # integration tests on the simulator
+uv run pytest                         # integration tests on the simulator
 ```
 Windows binaries are built by GitHub Actions on every push and attached to each published release.

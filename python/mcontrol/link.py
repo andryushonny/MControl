@@ -219,7 +219,10 @@ class Stream:
             self.w.close()
         port = int(self.link.server.get("data_port", DATA_PORT))
         w = Wire(self.link.addr, port)
-        w.send({"session": self.link.session, "want": "raw" if self.raw else "preview", "fps": self.fps or 0})
+        hello = {"session": self.link.session, "want": "raw" if self.raw else "preview"}
+        if self.fps:
+            hello["fps"] = self.fps                # else the server's --viewer-fps
+        w.send(hello)
         r = w.recv_json()
         if not r.get("ok"):
             raise McError.from_reply(r.get("error", {}))

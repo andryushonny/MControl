@@ -1,10 +1,9 @@
-"""Integration tests against `mc-server --sim`. Run: python -m pytest tests  (build first: cargo build --release)."""
-import os, subprocess, sys, time, tempfile
+"""Integration tests against `mc-server --sim`. Run: uv run pytest  (build first: cargo build --release)."""
+import os, subprocess, time, tempfile
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "python"))
-from mcontrol import Microscope, Viewer, McError  # noqa: E402
+from mcontrol import Microscope, Viewer, McError
 
 EXE = os.path.join(ROOT, "target", "release", "mc-server" + (".exe" if os.name == "nt" else ""))
 HOST = "127.0.0.1"

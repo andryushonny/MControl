@@ -29,7 +29,7 @@ class Stage(_Part):
     def goto(self, x=None, y=None, z=None):
         return tuple(self._set("goto", **_xyz(x=x, y=y, z=z))["pos_um"])
 
-    def move(self, dx=0.0, dy=0.0, dz=0.0):
+    def move(self, dx=None, dy=None, dz=None):
         return tuple(self._do("move", **_xyz(dx=dx, dy=dy, dz=dz))["pos_um"])
 
     def stop(self):
@@ -186,14 +186,14 @@ class Microscope(_Client):
         l = self.link
         self.stage, self.camera, self.light, self.laser, self.cooler = Stage(l), Camera(l), Light(l), Laser(l), Cooler(l)
 
-    def snap(self, x=None, y=None, z=None, dx=None, dy=None, dz=None, settle_ms=0, timeout_ms=5000):
+    def snap(self, x=None, y=None, z=None, dx=None, dy=None, dz=None, settle_ms=None, timeout_ms=None):
         """Move (absolute x/y/z or relative dx/dy/dz, or nowhere), wait until still, return the first frame
         exposed after that. Absolute or no move -> safe to repeat after a reconnect; relative -> not."""
         rel = any(v is not None for v in (dx, dy, dz))
-        a = _xyz(x=x, y=y, z=z, dx=dx, dy=dy, dz=dz)
+        a = _xyz(x=x, y=y, z=z, dx=dx, dy=dy, dz=dz, settle_ms=settle_ms, timeout_ms=timeout_ms)
         s = self.stream
-        r = self.link.call("snap", idempotent=not rel, settle_ms=settle_ms, timeout_ms=timeout_ms, **a)
-        return s.wait(seq=r["seq"], timeout=timeout_ms / 1000 + 5)
+        r = self.link.call("snap", idempotent=not rel, **a)
+        return s.wait(seq=r["seq"], timeout=(timeout_ms or 5000) / 1000 + 5)
 
     def fetch(self, seq):
         """Re-fetch a frame still in the server ring (e.g. one you missed)."""
