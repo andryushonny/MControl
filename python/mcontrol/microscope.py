@@ -123,6 +123,7 @@ class Cooler(_Part):
 class _Client:
     ROLE = "viewer"
     RAW = False
+    _fps = None                                 # preview rate asked by a Viewer
 
     def __init__(self, host=None, name=None, token=None, timeout=120.0):
         """host: "192.168.1.50", "pc-1:5170", "[fe80::1]"; omitted: MCONTROL_HOST, the last server used,
@@ -139,7 +140,7 @@ class _Client:
     def stream(self) -> Stream:
         """Data connection, opened on first use."""
         if self._stream is None:
-            self._stream = Stream(self.link, raw=self.RAW, live=not self.RAW)
+            self._stream = Stream(self.link, raw=self.RAW, live=not self.RAW, fps=self._fps)
         return self._stream
 
     def live(self, seconds=None, count=None, fps=None):
@@ -200,7 +201,12 @@ class _Client:
 
 
 class Viewer(_Client):
-    """Read-only: previews (JPEG), status, events. Any number of these."""
+    """Read-only: previews (JPEG), status, events. Up to --max-viewers at once (5 by default).
+    fps: preview rate wanted (the server's --viewer-fps by default, 25; at most 30)."""
+
+    def __init__(self, host=None, name=None, token=None, fps=None, timeout=120.0):
+        super().__init__(host, name, token, timeout)
+        self._fps = fps
 
     def fetch(self, seq=0):
         """One full frame from the ring (0 = newest), at most 1/s for viewers."""

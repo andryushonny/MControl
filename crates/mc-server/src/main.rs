@@ -47,7 +47,8 @@ OTHER
   --speed UM_S      real stage speed, um/s (default 3000)
   --ring N          frames kept for re-fetch (default 20)
   --dead-ms N       operator silent this long: stop stage, laser off (default 3000)
-  --viewer-fps F    preview frames per second for viewers (default 3)
+  --viewer-fps F    preview frames per second for viewers (default 25, at most 30)
+  --max-viewers N   viewers at the same time (default 5); the operator does not count
   --no-guard        do not start the guard process
   --log FILE        also write the log to FILE
   --no-color        plain log
@@ -240,7 +241,8 @@ fn main() {
         discovery_port,
         bind,
         dead_ms: arg("--dead-ms").and_then(|v| v.parse().ok()).unwrap_or(3000),
-        viewer_fps: arg("--viewer-fps").and_then(|v| v.parse().ok()).unwrap_or(3.0),
+        viewer_fps: arg("--viewer-fps").and_then(|v| v.parse().ok()).unwrap_or(25.0),
+        max_viewers: arg("--max-viewers").and_then(|v| v.parse().ok()).unwrap_or(5),
         access,
     };
     let ip = if bind.is_unspecified() { primary_ip() } else { bind.to_string() };
@@ -255,6 +257,7 @@ fn main() {
     }
     let scope = if a.is_open() { paint(YELLOW, &a.allow_text) } else { a.allow_text.clone() };
     row("Access", scope, if a.needs_token() { "Token required" } else { "No token" });
+    row("Viewers", format!("Up to {}", ncfg.max_viewers), &format!("Previews at {} fps", ncfg.viewer_fps));
     if a.operators_text != a.allow_text {
         row("Operators", a.operators_text.clone(), "Others connect as viewers");
     }

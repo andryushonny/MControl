@@ -71,13 +71,17 @@ def test_roles(server):
 
 
 def test_many_viewers(server):
-    vs = [Viewer(HOST, name=f"v{i}") for i in range(8)]
+    vs = [Viewer(HOST, name=f"v{i}") for i in range(5)]   # the default limit
+    with pytest.raises(McError) as e:
+        Viewer(HOST, name="v6")
+    assert e.value.code == "E114"
     with Microscope(HOST) as m:
         n = sum(1 for _ in m.live(seconds=2))
-        assert n / 2 > 15                                  # raw stream keeps up while 8 viewers watch
+        assert n / 2 > 15                                  # raw stream keeps up while 5 viewers watch
         assert not m.stream.on                             # switched off after the loop
     for v in vs:
-        assert v.latest().is_preview
+        t, n = time.time(), sum(1 for _ in v.live(seconds=1))
+        assert v.latest().is_preview and n >= 15         # viewers get ~25 fps previews
         v.close()
 
 

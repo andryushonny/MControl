@@ -15,8 +15,8 @@ from .wire import DATA_PORT, K_FRAME, Wire
 class Stream:
     KEEP = 16                                   # frames kept for frame(seq)
 
-    def __init__(self, link, raw: bool, live: bool):
-        self.link, self.raw, self.on, self.fps = link, raw, live, None
+    def __init__(self, link, raw: bool, live: bool, fps=None):
+        self.link, self.raw, self.on, self.fps = link, raw, live, fps
         self.latest = None                      # newest frame
         self._kept = {}                         # (seq, is_preview) -> Frame
         self._cv = threading.Condition()

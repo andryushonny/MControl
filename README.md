@@ -6,7 +6,7 @@ Control an **Optosky ATR8300** microscope (stage, focus, light, laser, TEC) and 
 
 * **One exe** on the microscope PC, nothing to install there apart from the MindVision SDK. A colour log shows who is connected and what is sent.
 * **Full resolution, fast.** Raw Bayer frames are sent as the sensor gives them: no conversion on PC 1. Each frame carries the stage position at mid-exposure and the time on the shared clock.
-* **One operator, many viewers.** The operator holds a lease. Viewers are read-only and get small JPEG previews, encoded once per frame and shared by all of them. Every action of the operator is sent to all clients as an event, so viewers see what is done, by whom, and what came out.
+* **One operator, many viewers.** The operator holds a lease. Viewers are read-only and get JPEG previews at up to 30 fps (25 by default), encoded once per frame and shared by all of them; 5 viewers at a time by default (`--max-viewers`). Every action of the operator is sent to all clients as an event, so viewers see what is done, by whom, and what came out.
 * **Local network by default.** Only local addresses may connect unless you say otherwise; see [Network and security](#network-and-security).
 * **Safe.** If the operator goes silent, the stage stops and the laser goes off. A separate guard process does the same over COM if the server itself hangs or dies.
 * **Stable client.** The Python client finds the server and remembers it, and reconnects by itself. It repeats a command after a reconnect only when repeating is harmless (`goto`, settings, reads); relative moves are never repeated.
@@ -72,7 +72,7 @@ Viewer().watch()          # prints every operator action, like the server log
 | Object | What |
 |---|---|
 | `Microscope()` / `Microscope("192.168.1.50")` | operator. Without an address: `MCONTROL_HOST`, then the last server used, then LAN discovery |
-| `Viewer()` | read-only: previews, events, `fetch()` = one full frame per second |
+| `Viewer(fps=25)` | read-only: previews (`live()`, `latest()`), events, `fetch()` = one full frame per second |
 | `Microscope(token="...")` | only when the server asks for a token (or `MCONTROL_TOKEN`); remembered per server |
 | `m.stage` | `position`, `goto(x,y,z)`, `move(dx,dy,dz)`, `stop()`, `zero()`, `confirm()`, `motors(on)` |
 | `m.camera` | `exposure_ms`, `gain`, `auto_exposure(on)`, `white_balance()`, `state` |
@@ -96,6 +96,7 @@ The emphasis is the local network; reaching the microscope from outside is possi
 | `--discovery-port`, `--no-discovery` | UDP 5159 by default. Without discovery clients give the address: `Microscope("192.168.1.10:5160")` |
 | `--allow LIST` | who may connect: `local` (default: loopback, 10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, IPv6 local), `any`, addresses, ranges `203.0.113.0/24` |
 | `--operators LIST` | who may take control (default: same as `--allow`); everybody else can only watch |
+| `--max-viewers N`, `--viewer-fps F` | viewers at the same time (default 5) and their preview rate (default 25, at most 30) |
 | `--token TEXT` | shared secret (or env `MC_TOKEN`). Required when `--allow` goes beyond local networks: the server refuses to start otherwise (E121) |
 
 Options can live in `mc-server.conf` next to the exe, one per line, so nobody types them twice:
@@ -113,7 +114,7 @@ allow-laser = false
 * Only addresses in `--allow` get an answer; only addresses in `--operators` may control; a token if set; one operator at a time.
 * The controller only receives the known Optosky commands (E305 for anything else), stage moves stay inside the soft limits, the laser is blocked unless the server is started with `--allow-laser`, and never above the controller's maximum.
 * Operator silent for 3 s: stage stops, laser off. Server hung: the guard process does the same over COM.
-* Session ids are random, commands are limited to 64 kB, viewers are rate-limited.
+* Session ids are random, commands are limited to 64 kB, viewers are limited in number (`--max-viewers`, 5) and in full-frame requests.
 
 ![When something breaks](docs/img/safety.png)
 
@@ -137,6 +138,7 @@ Each error is an `McError` with a `code`; the server log shows the same codes. G
 | E111 | net | Address not allowed | Add the client's address or network to --allow on the server |
 | E112 | net | Wrong or missing token | Give the server's token: Microscope(token=...) or MCONTROL_TOKEN |
 | E113 | net | Control not allowed from this address | Connect as viewer, or add the address to --operators on the server |
+| E114 | net | Too many viewers | Close a viewer, or start the server with a larger --max-viewers |
 | E120 | net | Cannot listen on this address or port | Another program uses the port, or the --bind address is not on this PC |
 | E121 | net | Open beyond the local network without a token | Give --token, or keep --allow to local networks |
 | E201 | stage | Outside the soft limits | Stay inside the stage range (mc-server --help shows the limits) |

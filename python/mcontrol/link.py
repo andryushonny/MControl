@@ -98,7 +98,7 @@ class Link:
             if not r.get("ok"):
                 w.close()
                 e = McError.from_reply(r.get("error", {}))
-                if e.code in ("E103", "E111", "E112", "E113"):   # the server said no: final
+                if e.code in ("E103", "E111", "E112", "E113", "E114"):   # the server said no: final
                     raise e
                 errors.append(f"{h}: {e}")        # not a control port (e.g. a remembered port that moved)
                 continue

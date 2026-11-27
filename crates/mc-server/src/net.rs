@@ -71,6 +71,7 @@ pub struct Cfg {
     pub bind: IpAddr,
     pub dead_ms: u64,
     pub viewer_fps: f64,
+    pub max_viewers: usize,
     pub access: Access,
 }
 
@@ -213,6 +214,10 @@ impl Server {
             Some(McError::new("E112", ""))
         } else if role == Role::Operator && !a.may_operate(&addr.ip()) {
             Some(McError::new("E113", addr.ip().to_string()))
+        } else if role == Role::Viewer
+            && self.sessions.lock().unwrap().iter().filter(|s| s.role == Role::Viewer).count() >= self.cfg.max_viewers
+        {
+            Some(McError::new("E114", format!("{} at most", self.cfg.max_viewers)))
         } else {
             None
         };
