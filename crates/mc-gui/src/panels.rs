@@ -960,7 +960,7 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
             ui.label("Exchange:");
             ui.checkbox(&mut app.arrow_rev_x, "left with right");
             ui.checkbox(&mut app.arrow_rev_y, "up with down");
-            ui.checkbox(&mut app.arrow_swap, "up/down with left/right");
+            ui.checkbox(&mut app.arrow_swap, "swap").on_hover_text("up moves right, down moves left, right moves up, left moves down");
         })
         .response
         .on_hover_text("only which way the arrows move the stage; the picture does not change");
