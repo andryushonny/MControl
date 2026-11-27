@@ -54,6 +54,9 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &
     let here = link.stage_pos().ok_or("no stage position yet")?;
     let f = o.field_um();
     let (sx, sy) = (0.3 * f[0], 0.3 * f[1]);
+    if quick {
+        return quick_m(link, o, settle_ms, back_um, st, here);
+    }
     let mut spots = vec![[0.0, 0.0]];
     let around: &[(i32, i32)] = if quick { &[(1, 0), (0, 1)] } else { &[(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] };
     for (i, j) in around {
@@ -128,6 +131,187 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &
         return Ok(first);
     }
     Ok(fit_robust(&ms2, o.frame))
+}
+
+/// Orientation and scale from whole frames: here, moved by a quarter field along x, along y. Each moved frame's
+/// shift against the first (pixels) is found by comparing the whole pictures (coarse to fine), so edges, dust
+/// and shading are enough, no texture needed. With shifts s_x, s_y for the moves D_x, D_y:
+///     [s_x s_y] = -m [D_x D_y]   ->   m = -[s_x s_y] [D_x D_y]^-1
+fn quick_m(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Calib>, here: [f64; 3]) -> Result<Fit, String> {
+    let f = o.field_um();
+    let d = 0.25 * f[0].min(f[1]);
+    let mut frames = vec![];
+    link.call(json!({"cmd": "begin"}))?;
+    let shot = (|| -> Result<(), String> {
+        for (dx, dy) in [(0.0, 0.0), (d, 0.0), (0.0, d)] {
+            if st.lock().unwrap().stop {
+                return Err("stopped".into());
+            }
+            let (x, y) = (here[0] + dx, here[1] + dy);
+            link.call(json!({"cmd": "goto", "x": x - back_um, "y": y - back_um}))?;
+            let fr = link.snap(json!({"x": x, "y": y, "settle_ms": settle_ms}))?;
+            let xyz = fr.xyz();
+            frames.push((pixels::unpack(&fr.meta, &fr.data)?.grey2(), [xyz[0], xyz[1]]));
+            st.lock().unwrap().done += 1;
+        }
+        Ok(())
+    })();
+    let _ = link.call(json!({"cmd": "end"}));
+    let _ = link.call(json!({"cmd": "goto", "x": here[0], "y": here[1]}));
+    shot?;
+    st.lock().unwrap().phase = "comparing".into();
+    let m = m_from_frames(&frames)?;
+    Ok(Fit { m, k: o.k, rms_plain_px: 0.0, rms_px: 0.0, matches: 2 })
+}
+
+/// m from half-size grey frames: the first, then two taken with the stage moved (not along one line).
+pub fn m_from_frames(frames: &[((Vec<f32>, usize, usize), P2)]) -> Result<[f64; 4], String> {
+    let ((g0, w, h), at0) = &frames[0];
+    let mut s = vec![];
+    let mut dm = vec![];
+    for ((g1, _, _), at1) in &frames[1..] {
+        // half-size pixels -> full-resolution
+        let sh = frame_shift(g0, g1, *w, *h).ok_or("the frames could not be matched: too little in the picture (an edge, a corner or dust helps), or the stage did not move")?;
+        s.push([2.0 * sh[0], 2.0 * sh[1]]);
+        dm.push([at1[0] - at0[0], at1[1] - at0[1]]);
+    }
+    let det = dm[0][0] * dm[1][1] - dm[1][0] * dm[0][1];
+    if det.abs() < 1e-6 {
+        return Err("the stage did not move".into());
+    }
+    // D^-1 for D = [[Dx0, Dy0], [Dx1, Dy1]] (columns are the moves)
+    let inv = [dm[1][1] / det, -dm[1][0] / det, -dm[0][1] / det, dm[0][0] / det];
+    let (sx, sy) = (s[0], s[1]);
+    let m = [-(sx[0] * inv[0] + sy[0] * inv[2]), -(sx[0] * inv[1] + sy[0] * inv[3]), -(sx[1] * inv[0] + sy[1] * inv[2]), -(sx[1] * inv[1] + sy[1] * inv[3])];
+    if !m.iter().all(|v| v.is_finite()) || (m[0] * m[3] - m[1] * m[2]).abs() < 1e-9 {
+        return Err("the frames could not be matched".into());
+    }
+    Ok(m)
+}
+
+/// A grey picture made `k` times smaller (box mean).
+fn shrink(g: &[f32], w: usize, h: usize, k: usize) -> (Vec<f32>, usize, usize) {
+    let (ow, oh) = (w / k, h / k);
+    let mut o = vec![0f32; ow * oh];
+    for y in 0..oh {
+        for x in 0..ow {
+            let mut sum = 0.0;
+            for j in 0..k {
+                for i in 0..k {
+                    sum += g[(y * k + j) * w + x * k + i];
+                }
+            }
+            o[y * ow + x] = sum / (k * k) as f32;
+        }
+    }
+    (o, ow, oh)
+}
+
+/// How alike g1(x + s) and g0(x) are over their overlap: the correlation coefficient (1 = the same up to
+/// brightness and contrast; plain areas count for nothing). None when the overlap is under a third.
+fn zncc(g0: &[f32], g1: &[f32], w: usize, h: usize, sx: i64, sy: i64) -> Option<f64> {
+    let (x0, x1) = (0i64.max(-sx), (w as i64).min(w as i64 - sx));
+    let (y0, y1) = (0i64.max(-sy), (h as i64).min(h as i64 - sy));
+    if (x1 - x0) * (y1 - y0) * 3 < (w * h) as i64 {
+        return None;
+    }
+    let (mut a, mut b, mut aa, mut bb, mut ab) = (0f64, 0f64, 0f64, 0f64, 0f64);
+    for y in y0..y1 {
+        let (r0, r1) = ((y * w as i64) as usize, ((y + sy) * w as i64 + sx) as usize);
+        for x in x0..x1 {
+            let (p, q) = (g0[r0 + x as usize] as f64, g1[r1 + x as usize] as f64);
+            a += p;
+            b += q;
+            aa += p * p;
+            bb += q * q;
+            ab += p * q;
+        }
+    }
+    let n = ((x1 - x0) * (y1 - y0)) as f64;
+    let (va, vb) = (aa - a * a / n, bb - b * b / n);
+    if va <= 1e-9 || vb <= 1e-9 {
+        return Some(0.0);
+    }
+    Some((ab - a * b / n) / (va * vb).sqrt())
+}
+
+/// The shift s (pixels of g0's size) with g1(x + s) = g0(x): every shift at 1/16 size, then refined at 1/4 and
+/// full size, sub-pixel by a parabola. None when no shift stands out.
+pub fn frame_shift(g0: &[f32], g1: &[f32], w: usize, h: usize) -> Option<P2> {
+    // the slow shading out (uneven light, vignetting): it looks alike at any shift
+    let r = (w.max(h) / 16).max(2);
+    let (g0, g1) = (&highpass(g0, w, h, r)[..], &highpass(g1, w, h, r)[..]);
+    let (c0, cw, ch) = shrink(g0, w, h, 16);
+    let (c1, _, _) = shrink(g1, w, h, 16);
+    let mut all = vec![];
+    for sy in -(ch as i64) * 2 / 3..=(ch as i64) * 2 / 3 {
+        for sx in -(cw as i64) * 2 / 3..=(cw as i64) * 2 / 3 {
+            if let Some(c) = zncc(&c0, &c1, cw, ch, sx, sy) {
+                all.push((c, sx, sy));
+            }
+        }
+    }
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    // a clear best: alike, and clearly more than shifts away from it
+    let (best, sx0, sy0) = *all.first()?;
+    // the best shift well away from it (past the width of its peak)
+    let far = (cw.max(ch) / 5).max(3) as i64;
+    let rival = all.iter().filter(|c| (c.1 - sx0).abs() > far || (c.2 - sy0).abs() > far).map(|c| c.0).next().unwrap_or(0.0);
+    // (on smooth pictures every shift looks fairly alike: how much less unlike the best is, counts)
+    if best < 0.5 || (1.0 - best) > 0.7 * (1.0 - rival) {
+        return None;
+    }
+    let (mut sx, mut sy) = (sx0, sy0);
+    let mut level = 16;
+    for k in [4usize, 1] {
+        let (a, aw, ah) = if k == 1 { (g0.to_vec(), w, h) } else { shrink(g0, w, h, k) };
+        let (b, _, _) = if k == 1 { (g1.to_vec(), w, h) } else { shrink(g1, w, h, k) };
+        let f = (level / k) as i64;
+        let (cx, cy) = (sx * f, sy * f);
+        let mut best = (f64::MIN, cx, cy);
+        for dy in -f - 2..=f + 2 {
+            for dx in -f - 2..=f + 2 {
+                if let Some(c) = zncc(&a, &b, aw, ah, cx + dx, cy + dy) {
+                    if c > best.0 {
+                        best = (c, cx + dx, cy + dy);
+                    }
+                }
+            }
+        }
+        (sx, sy) = (best.1, best.2);
+        level = k;
+    }
+    // sub-pixel: a parabola through the neighbours along x and along y
+    let e = |dx: i64, dy: i64| zncc(g0, g1, w, h, sx + dx, sy + dy).map(|c| -c);
+    let vertex = |a: Option<f64>, b: Option<f64>, c: Option<f64>| match (a, b, c) {
+        (Some(a), Some(b), Some(c)) if a + c - 2.0 * b > 1e-12 => (0.5 * (a - c) / (a + c - 2.0 * b)).clamp(-0.5, 0.5),
+        _ => 0.0,
+    };
+    let fx = vertex(e(-1, 0), e(0, 0), e(1, 0));
+    let fy = vertex(e(0, -1), e(0, 0), e(0, 1));
+    Some([sx as f64 + fx, sy as f64 + fy])
+}
+
+/// g minus its mean over a (2r+1)^2 box (cut at the edges).
+fn highpass(g: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let mut s = vec![0f64; (w + 1) * (h + 1)];
+    for y in 0..h {
+        let mut row = 0.0;
+        for x in 0..w {
+            row += g[y * w + x] as f64;
+            s[(y + 1) * (w + 1) + x + 1] = s[y * (w + 1) + x + 1] + row;
+        }
+    }
+    let mut o = vec![0f32; w * h];
+    for y in 0..h {
+        let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(h));
+        for x in 0..w {
+            let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(w));
+            let sum = s[y1 * (w + 1) + x1] - s[y0 * (w + 1) + x1] - s[y1 * (w + 1) + x0] + s[y0 * (w + 1) + x0];
+            o[y * w + x] = g[y * w + x] - (sum / ((x1 - x0) * (y1 - y0)) as f64) as f32;
+        }
+    }
+    o
 }
 
 /// A half-size grey picture with the distortion taken out (pixel i covers full-res [2i, 2i+2)).
@@ -426,6 +610,34 @@ pub fn fit(ms: &[Match], frame: [u32; 2]) -> Fit {
 
 #[cfg(test)]
 mod tests {
+    /// Whole-frame shift on a nearly plain picture: a corner, a few specks, shading.
+    #[test]
+    fn shift_of_a_plain_picture() {
+        let (w, h) = (648usize, 486usize);
+        let pic = |ox: f64, oy: f64| {
+            let mut g = vec![0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let (u, v) = (x as f64 - ox, y as f64 - oy);
+                    let mut val = if u > 300.0 && v > 200.0 { 180.0 } else { 60.0 };
+                    val += 0.02 * u;
+                    for (px, py) in [(100.0, 80.0), (420.0, 330.0), (250.0, 400.0)] {
+                        if (u - px).powi(2) + (v - py).powi(2) < 25.0 {
+                            val -= 40.0;
+                        }
+                    }
+                    g[y * w + x] = val as f32;
+                }
+            }
+            g
+        };
+        let g0 = pic(0.0, 0.0);
+        // the content moved by (-121, 37): g1(x + s) = g0(x) with s = (-121, 37)
+        let g1 = pic(-121.0, 37.0);
+        let s = super::frame_shift(&g0, &g1, w, h).unwrap();
+        assert!((s[0] + 121.0).abs() < 0.6 && (s[1] - 37.0).abs() < 0.6, "{s:?}");
+    }
+
     use super::*;
 
     /// A camera mirrored in x and turned 90 degrees against the stage: the orientation is found.

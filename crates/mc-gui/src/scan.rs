@@ -455,6 +455,32 @@ mod e2e_lens {
 
     #[test]
     #[ignore]
+    fn e2e_orientation_from_a_wrong_guess() {
+        let addr = std::env::var("MC_E2E").expect("MC_E2E=host:port of mc-server --sim");
+        let link = Link::start(eframe::egui::Context::default(), addr, "e2e".into());
+        let t0 = Instant::now();
+        while link.stage_pos().is_none() {
+            assert!(t0.elapsed().as_secs() < 10, "no connection");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // wrong scale (0.35 instead of 0.22 um/px), turned 90 degrees and mirrored
+        let k = 1.0 / 0.35;
+        let o = Optics { m: [0.0, k, k, 0.0], ..Optics::guess("sim", 0.35, [1296, 972]) };
+        link.call(json!({"cmd": "goto", "x": 700.0, "y": 500.0})).unwrap();
+        let c = crate::calib::start(link.clone(), o, 50.0, 20.0, true);
+        let f = loop {
+            if let Some(r) = c.lock().unwrap().result.clone() {
+                break r.unwrap();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let t = 1.0 / 0.22;
+        eprintln!("m = {:?}", f.m);
+        assert!((f.m[0] - t).abs() < 0.05 * t && (f.m[3] - t).abs() < 0.05 * t && f.m[1].abs() < 0.05 * t && f.m[2].abs() < 0.05 * t, "{:?}", f.m);
+    }
+
+    #[test]
+    #[ignore]
     fn e2e_lens_tilt_align() {
         let addr = std::env::var("MC_E2E").expect("MC_E2E=host:port of mc-server --sim --sim-k1 0.05 --sim-tilt 1.5");
         let (k1, tilt) = (0.05, 1.5f64.to_radians());

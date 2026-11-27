@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.10
+- *Calibrate, Orientation* works on a plain substrate: the frames (here, a quarter field along x, along y) are compared whole (correlation, coarse to fine, the slow shading taken out first), so an edge, a corner or dust is enough; no texture needed. The scale (um/px) is measured as well, from any starting guess (on the simulator: 0.35 um/px turned and mirrored -> 0.2200, straight).
+- From a corner uses the same, so the scale is right there too.
+
 ## 0.6.9
 - From a corner: which edge runs left-right is answered by watching the stage: *Show me* moves it 1 mm along the red edge and back; the substrate went left-right, or away and back. (Telling it from the map alone is still there.)
 

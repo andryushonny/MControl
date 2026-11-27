@@ -77,7 +77,8 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Job>) -
             link.call(json!({"cmd": "goto", "x": x - back_um, "y": y - back_um}))?;
             let fr = link.snap(json!({"x": x, "y": y, "settle_ms": settle_ms}))?;
             let xyz = fr.xyz();
-            frames.push((small(&pixels::unpack(&fr.meta, &fr.data)?), [xyz[0], xyz[1]]));
+            let sensor = pixels::unpack(&fr.meta, &fr.data)?;
+            frames.push(((sensor.grey2(), small(&sensor)), [xyz[0], xyz[1]]));
             st.lock().unwrap().done += 1;
         }
         Ok(())
@@ -85,9 +86,18 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Job>) -
     let _ = link.call(json!({"cmd": "end"}));
     let _ = link.call(json!({"cmd": "goto", "x": here[0], "y": here[1]}));
     shot?;
-    let ((g0, w, h), at) = &frames[0];
-    let moves: Vec<(&[f32], P2)> = frames[1..].iter().map(|((g, _, _), p)| (g.as_slice(), [p[0] - at[0], p[1] - at[1]])).collect();
-    let m = orientation(g0, &moves, *w, *h, o.m)?;
+    // the camera: from the whole frames' shifts (scale too), snapped to the nearest straight way; if they cannot
+    // be matched, which of the 8 straight ways at the scale set agrees best
+    let half: Vec<((Vec<f32>, usize, usize), P2)> = frames.iter().map(|((g, _), p)| (g.clone(), *p)).collect();
+    let ((g0, w, h), at) = &frames.iter().map(|((_, s), p)| (s.clone(), *p)).next().unwrap();
+    let m = match crate::calib::m_from_frames(&half) {
+        Ok(m) => Optics::straight(m),
+        Err(_) => {
+            let moves: Vec<(Vec<f32>, P2)> = frames[1..].iter().map(|((_, (g, _, _)), p)| (g.clone(), [p[0] - at[0], p[1] - at[1]])).collect();
+            let moves: Vec<(&[f32], P2)> = moves.iter().map(|(g, d)| (g.as_slice(), *d)).collect();
+            orientation(g0, &moves, *w, *h, o.m)?
+        }
+    };
     let (c, quad) = find_corner(g0, *w, *h).ok_or("no corner found: put a corner of the substrate (sharp, with the substrate and the background clearly different) on the crosshair")?;
     Ok(Corner { m, at: *at, px: [(c[0] + 0.5) * DIV as f64, (c[1] + 0.5) * DIV as f64], quad })
 }
