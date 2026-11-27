@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.12
+- Settings, *Autofocus while scanning*: on / off, shown plainly; off means every frame at the z the scan began at (before, z still followed the surface measured earlier). The focus button stays for focusing by hand.
+
 ## 0.6.11
 - Flat field corrects better: the sensor's dark level is measured too (the light off for a moment, 2 frames at the same exposure, the light back as it was) and taken out before dividing, I' = (I - D) / F + D; without it the edges of darker parts of the sample stayed a little dark. 25 frames (5 x 5) instead of 9: less noise. Not used if the exposure changed while dark (automatic exposure) or it was not dark (room light).
 - Settings, *Flat field strength* (0.5 - 2, 1 as measured): the gain raised to this power, for what is left.

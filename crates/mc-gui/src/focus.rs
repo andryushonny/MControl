@@ -88,6 +88,10 @@ impl Focus {
     /// Where z should be at (x, y): the plane through the points so far (3 or more, spread out), else the
     /// nearest point, else `z0`.
     pub fn predict(&self, x: f64, y: f64, z0: f64) -> f64 {
+        // autofocus off: z stays where it was when the scan began
+        if !self.s.on {
+            return z0;
+        }
         let ps: Vec<&[f64; 4]> = self.points.iter().collect();
         if ps.len() >= 3 {
             // least squares z = a x + b y + c, around the points' centre

@@ -651,12 +651,17 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
             ui.label("Autofocus while scanning");
             ui.horizontal(|ui| {
-                changed |= ui.checkbox(&mut app.proj.scan.autofocus, "").changed();
-                ui.label("blurred below");
-                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_drop).speed(0.01).range(0.3..=0.95)).changed();
-                ui.label("of the last sharp; look up to +-");
-                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_max_um).speed(1.0).range(5.0..=100.0)).changed();
-                ui.label("um");
+                changed |= ui
+                    .checkbox(&mut app.proj.scan.autofocus, if app.proj.scan.autofocus { "on" } else { "off" })
+                    .on_hover_text("off: every frame at the z the scan began at, nothing searched or followed")
+                    .changed();
+                ui.add_enabled_ui(app.proj.scan.autofocus, |ui| {
+                    ui.label("blurred below");
+                    changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_drop).speed(0.01).range(0.3..=0.95)).changed();
+                    ui.label("of the last sharp; look up to +-");
+                    changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_max_um).speed(1.0).range(5.0..=100.0)).changed();
+                    ui.label("um");
+                });
             });
             ui.end_row();
             ui.label("Z step (. and , keys / PageUp, PageDown), um");
