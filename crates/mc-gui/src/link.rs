@@ -34,6 +34,9 @@ pub struct Live {
     pub xyz: [f64; 3],
     pub moving: bool,
     pub at: Instant,
+    /// the camera's exposure (ms) and gain when this frame was taken
+    pub exposure_ms: f64,
+    pub gain: f64,
 }
 
 #[derive(Default)]
@@ -192,6 +195,8 @@ impl Link {
                         xyz,
                         moving: f.meta["moving"].as_bool().unwrap_or(false),
                         at: Instant::now(),
+                        exposure_ms: f.meta["exp_us"].as_f64().unwrap_or(0.0) / 1000.0,
+                        gain: f.meta["gain"].as_f64().unwrap_or(0.0),
                     });
                     self.ctx.request_repaint();
                 }

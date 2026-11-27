@@ -432,7 +432,7 @@ mod e2e_lens {
         };
         println!("calibration: {fit:?}");
         {
-            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0] };
+            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None };
             let ms = crate::calib::DEBUG.lock().unwrap().clone();
             let mut res: Vec<f64> = ms.iter().map(|m| {
                 let (a, b) = (truth.undistort(m.p0), truth.undistort(m.p1));

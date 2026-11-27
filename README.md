@@ -68,6 +68,7 @@ How a session goes:
 Status bar: the link, the objective, the scan running with frames done and time left, the stitching, the queue and when everything will be done. *Stop* (Space) stops the stage and the scan and pauses the queue.
 
 **Optics, once per objective** (Settings → *Calibrate optics: Measure here*, on a spot with texture): nine frames, the stage moved by a third of the field between them, give the scale, the camera's turn and the **lens distortion** ($p = c + (q - c)(1 + k_1 r^2 + k_2 r^4)$). Frames are corrected before stitching (each Bayer plane on its own, so MStitch still gets raw frames), and so are the live picture and the preview.
+**Camera** (Settings): exposure, gain, auto exposure; remembered per objective and set again when that objective is put on.
 **White balance**: *Pick grey* and click something grey, or *Auto* from the live picture; it applies to the live picture, maps and squares, raw frames stay raw.
 
 The command line is now `mc-cli.exe` (status, goto, snap, bench).

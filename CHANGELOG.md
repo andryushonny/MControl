@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+- mc-operator, Settings: camera exposure, gain and auto exposure (shown as the camera has them; locked while scanning).
+- Exposure and gain are remembered per objective and given to the camera again when that objective is put on or the program reconnects.
+
 ## 0.5.0
 - `mc-operator.exe` is now the operator's program (Rust, GPU): map of the stage with the live picture and a preview map, selections snapped to the motor step, a scan queue grouped by objective (one stop per objective change) with MStitch stitching beside the next scan, status bar with progress and time left.
 - Limits per selection, with the overlap: quick ≤ 1200 frames, quality ≤ 225.

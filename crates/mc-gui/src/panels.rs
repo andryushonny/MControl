@@ -377,6 +377,9 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.label("um per pixel");
             ui.label(format!("{:.4}", app.proj.optics().um_per_px()));
             ui.end_row();
+            ui.label("Camera exposure, ms");
+            camera(app, ui);
+            ui.end_row();
             ui.label("Lens distortion k1, k2");
             ui.horizontal(|ui| {
                 changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().k[0]).speed(0.0005).range(-0.5..=0.5).fixed_decimals(4)).changed();
@@ -630,4 +633,43 @@ pub fn queue(app: &mut App, ctx: &egui::Context) {
         }
     });
     app.queue_open = open;
+}
+
+/// Exposure, gain, auto exposure. Shown as the latest live frame was taken; sent when an edit is finished
+/// (Enter, the mouse let go). Not while scanning: the frames of one map must look the same.
+fn camera(app: &mut App, ui: &mut egui::Ui) {
+    let now = app.link.state.lock().unwrap().live.as_ref().map(|l| (l.exposure_ms, l.gain));
+    let scanning = app.jobs.iter().any(|j| j.lock().unwrap().phase == crate::scan::Phase::Scanning) || app.calib.is_some();
+    let connected = app.link.state.lock().unwrap().connected;
+    ui.add_enabled_ui(connected && !scanning, |ui| {
+        ui.horizontal(|ui| {
+            let (mut e, mut g) = app.cam_edit.or(now).unwrap_or((20.0, 1.0));
+            let re = ui.add_enabled(!app.auto_exposure, egui::DragValue::new(&mut e).speed(0.1).range(0.05..=2000.0).fixed_decimals(2));
+            ui.label("gain");
+            let rg = ui.add(egui::DragValue::new(&mut g).speed(0.05).range(1.0..=16.0).fixed_decimals(0));
+            if re.changed() || rg.changed() {
+                app.cam_edit = Some((e, g));
+            }
+            let done = |r: &egui::Response| r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus());
+            if let Some((e, g)) = app.cam_edit {
+                if done(&re) || done(&rg) {
+                    if done(&re) {
+                        app.link.send(json!({"cmd": "exposure", "ms": e}));
+                    } else {
+                        app.link.send(json!({"cmd": "gain", "value": g.round() as i64}));
+                    }
+                    // remembered for this objective: put on again later, it comes back by itself
+                    app.proj.optics_mut().camera = Some([e, g.round()]);
+                    app.auto_exposure = false;
+                    app.cam_edit = None;
+                    app.changed();
+                }
+            }
+            if ui.checkbox(&mut app.auto_exposure, "auto").on_hover_text("the camera sets the exposure itself (not while scanning)").changed() {
+                app.link.send(json!({"cmd": "auto_exposure", "on": app.auto_exposure}));
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(if scanning { "not while scanning: the frames of one map must have the same exposure" } else { "not connected" });
 }

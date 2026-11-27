@@ -69,11 +69,14 @@ pub struct Optics {
     /// |q - c| over the half diagonal and c the frame centre. Zero: none. Measured by Calibrate optics.
     #[serde(default)]
     pub k: [f64; 2],
+    /// the camera's exposure (ms) and gain last used with this objective, given again when it is put on
+    #[serde(default)]
+    pub camera: Option<[f64; 2]>,
 }
 
 impl Optics {
     pub fn guess(objective: &str, um_per_px: f64, frame: [u32; 2]) -> Optics {
-        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0] }
+        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0], camera: None }
     }
 
     /// From an MStitch profile json ({"objective", "m", "frame", ...}).
@@ -90,6 +93,7 @@ impl Optics {
             m: [m[0], m[1], m[2], m[3]],
             frame: if fr.len() == 2 { [fr[0], fr[1]] } else { [2592, 1944] },
             profile_path: Some(path.display().to_string()),
+            camera: None,
             k: v["k"].as_array().map(|a| [a.first().and_then(|x| x.as_f64()).unwrap_or(0.0), a.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]).unwrap_or([0.0, 0.0]),
         })
     }
@@ -353,7 +357,7 @@ mod tests {
 
     #[test]
     fn optics_round_trip() {
-        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0] };
+        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0], camera: None };
         let p = o.pixel_to_stage([3.0, 4.0], 50.0, 40.0);
         assert!((p[0] - 3.0).abs() < 1e-12 && (p[1] - 4.0).abs() < 1e-12);
         let af = Affine([2.0, 1.0, 5.0, -1.0, 3.0, 7.0]);

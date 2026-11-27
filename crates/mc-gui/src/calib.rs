@@ -322,7 +322,7 @@ pub fn fit_robust(ms: &[Match], frame: [u32; 2]) -> Fit {
     }
     let mut f = fit(&keep, frame);
     for _ in 0..4 {
-        let o = Optics { objective: String::new(), m: f.m, frame, profile_path: None, k: f.k };
+        let o = Optics { objective: String::new(), m: f.m, frame, profile_path: None, k: f.k, camera: None };
         let res: Vec<f64> = keep.iter().map(|m| residual(m, &o)).collect();
         let lim = (3.0 * med(res.clone())).max(1.0);
         let next: Vec<Match> = keep.iter().zip(&res).filter(|(_, r)| **r <= lim).map(|(m, _)| *m).collect();
@@ -343,7 +343,7 @@ fn residual(mm: &Match, o: &Optics) -> f64 {
 }
 
 pub fn fit(ms: &[Match], frame: [u32; 2]) -> Fit {
-    let optics = |k: [f64; 2]| Optics { objective: String::new(), m: [1.0, 0.0, 0.0, 1.0], frame, profile_path: None, k };
+    let optics = |k: [f64; 2]| Optics { objective: String::new(), m: [1.0, 0.0, 0.0, 1.0], frame, profile_path: None, k, camera: None };
     let cost = |k: [f64; 2]| solve_m(ms, &optics(k)).1;
     let (_, plain) = solve_m(ms, &optics([0.0, 0.0]));
     // Nelder-Mead on (k1, k2)
@@ -397,7 +397,7 @@ mod tests {
     /// Features seen through a distorting lens at several stage positions: the fit finds the lens and m back.
     #[test]
     fn finds_distortion_and_m() {
-        let truth = Optics { objective: String::new(), m: [4.5, 0.08, -0.08, 4.5], frame: [2592, 1944], profile_path: None, k: [0.06, -0.01] };
+        let truth = Optics { objective: String::new(), m: [4.5, 0.08, -0.08, 4.5], frame: [2592, 1944], profile_path: None, k: [0.06, -0.01], camera: None };
         let [a, b, c, d] = truth.m;
         let mut ms = vec![];
         for (i, dm) in [[-250.0, -180.0], [250.0, 0.0], [0.0, 180.0], [250.0, 180.0], [-250.0, 0.0]].iter().enumerate() {

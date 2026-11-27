@@ -99,6 +99,11 @@ pub struct App {
     /// seconds per frame, learned from the scans done (for the time left)
     pub sec_per_frame: f64,
     pub queue_open: bool,
+    /// camera settings being edited (exposure ms, gain); None: show what the camera has
+    pub cam_edit: Option<(f64, f64)>,
+    pub auto_exposure: bool,
+    /// the objective's remembered exposure was given to the camera on this connection
+    pub cam_applied: bool,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -149,6 +154,9 @@ impl App {
             wait_objective: None,
             sec_per_frame: 0.6,
             queue_open: false,
+            cam_edit: None,
+            auto_exposure: false,
+            cam_applied: false,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -180,6 +188,15 @@ impl App {
         let m = s.best_scan()?.map.as_ref()?;
         let raw = self.map_raw.get(m)?;
         Some((self.maps.get(m)?, s.fix.map(|f| raw.then(&f)).unwrap_or(*raw)))
+    }
+
+    /// Give the camera the exposure and gain last used with the objective on the microscope.
+    pub fn apply_camera(&mut self) {
+        if let Some([e, g]) = self.proj.optics().camera {
+            self.link.send(serde_json::json!({"cmd": "exposure", "ms": e}));
+            self.link.send(serde_json::json!({"cmd": "gain", "value": g.round() as i64}));
+            self.auto_exposure = false;
+        }
     }
 
     /// The view's turn that stands the lattice level: the smallest turn that makes its first axis horizontal.
@@ -424,6 +441,7 @@ impl App {
         if let Some(k) = self.proj.objectives.iter().position(|o| o.objective == name) {
             self.proj.current = k;
             self.thumbs.clear();
+            self.apply_camera();
             self.changed();
         }
         if self.wait_objective.as_deref() == Some(name) {
@@ -532,6 +550,14 @@ impl eframe::App for App {
         self.load_maps();
         self.poll_jobs();
         self.poll_calibration();
+        // a new connection: the camera gets this objective's exposure again
+        let connected = self.link.state.lock().unwrap().connected;
+        if connected && !self.cam_applied {
+            self.cam_applied = true;
+            self.apply_camera();
+        } else if !connected {
+            self.cam_applied = false;
+        }
         self.run_queue();
         panels::top(self, ui);
         panels::status(self, ui);
