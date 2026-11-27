@@ -1,5 +1,5 @@
 //! Flat field: the frame is darker towards its edges (vignetting, and the lamp lights the field unevenly).
-//! Nine frames around the current spot, the stage moved by half a field between them, so a feature of the
+//! 25 frames around the current spot (5 x 5, the stage moved by about half a field between them), and two with the light off for the sensor's dark level, so a feature of the
 //! sample is at a different place of the field in each; per Bayer plane (each colour on its own) every frame
 //! is reduced to a coarse grid and divided by its mean, the median of the nine at each grid point is the
 //! illumination there (features fall out of the median), smoothed, mean 1. A frame is then corrected as
@@ -30,6 +30,8 @@ pub struct Flat {
     pub g: Vec<f32>,
     /// darkest point against the mean (for the message)
     pub min: f32,
+    /// what the sensor gives with no light, per plane (subtracted before dividing; 0 when not measured)
+    pub dark: Vec<f32>,
 }
 
 impl std::fmt::Debug for Flat {
@@ -65,7 +67,8 @@ impl Flat {
     }
 
     /// From frames of one objective, the stage moved between them.
-    pub fn from_frames(frames: &[Sensor]) -> Result<Flat, String> {
+    /// `dark`: frames with the light off at the same exposure (may be none).
+    pub fn from_frames(frames: &[Sensor], dark: &[Sensor]) -> Result<Flat, String> {
         let s0 = frames.first().ok_or("no frames")?;
         let step = if s0.fmt.starts_with("bayer") { 2 } else { 1 };
         let full = ((1u32 << s0.bits) - 1) as f32;
@@ -81,6 +84,21 @@ impl Flat {
         }
         let n = gw * gh;
         let np = step * step;
+        // the dark level per plane: subtracted from every frame first (else the edges stay a little dark)
+        let mut dk = vec![0f32; np];
+        if !dark.is_empty() {
+            for d in dark.iter().filter(|d| d.w == s0.w && d.h == s0.h) {
+                let (g, _, _) = Flat::grid(d, step);
+                for p in 0..np {
+                    dk[p] += g[p * n..(p + 1) * n].iter().sum::<f32>() / n as f32 / dark.len() as f32;
+                }
+            }
+        }
+        for g in grids.iter_mut() {
+            for p in 0..np {
+                g[p * n..(p + 1) * n].iter_mut().for_each(|v| *v = (*v - dk[p]).max(0.5));
+            }
+        }
         // each frame per plane divided by its mean: a brighter or darker part of the sample does not count
         for g in grids.iter_mut() {
             for p in 0..np {
@@ -119,7 +137,7 @@ impl Flat {
         if min < 0.2 {
             return Err(format!("the field is lit very unevenly (darkest {:.0} % of the mean): check the lamp and the aperture", min * 100.0));
         }
-        Ok(Flat { w: s0.w, h: s0.h, step, gw, gh, g: med, min })
+        Ok(Flat { w: s0.w, h: s0.h, step, gw, gh, g: med, min, dark: dk })
     }
 
     /// The gain at a plane pixel (bilinear between grid points; grid point i is the centre of cell i).
@@ -138,7 +156,8 @@ impl Flat {
 
     /// Correct a raw frame in place: each value divided by the illumination there. Frames of another size
     /// (binned, cropped) are left as they are.
-    pub fn apply(&self, s: &mut Sensor) -> bool {
+    /// `strength`: 1 as measured; more corrects harder (the gain raised to this power).
+    pub fn apply(&self, s: &mut Sensor, strength: f32) -> bool {
         if s.w != self.w || s.h != self.h {
             return false;
         }
@@ -163,9 +182,13 @@ impl Flat {
                     self.row(p, (j as f32 - off) / c, &mut row);
                     let y = j * step + dy;
                     for (i, &(i0, i1, ax)) in xs.iter().enumerate() {
-                        let g = (row[i0] + (row[i1] - row[i0]) * ax).max(0.05);
+                        let mut g = (row[i0] + (row[i1] - row[i0]) * ax).max(0.05);
+                        if strength != 1.0 {
+                            g = g.powf(strength);
+                        }
                         let k = y * s.w + i * step + dx;
-                        s.v[k] = (s.v[k] as f32 / g).round().min(full) as u16;
+                        let dk = self.dark.get(p).copied().unwrap_or(0.0);
+                        s.v[k] = ((s.v[k] as f32 - dk).max(0.0) / g + dk).round().clamp(0.0, full) as u16;
                     }
                 }
             }
@@ -178,7 +201,7 @@ impl Flat {
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
         }
-        let head = json!({"w": self.w, "h": self.h, "step": self.step, "gw": self.gw, "gh": self.gh, "cell": CELL, "min": self.min});
+        let head = json!({"w": self.w, "h": self.h, "step": self.step, "gw": self.gw, "gh": self.gh, "cell": CELL, "min": self.min, "dark": self.dark});
         let mut out = head.to_string().into_bytes();
         out.push(b'\n');
         for v in &self.g {
@@ -200,7 +223,8 @@ impl Flat {
         if g.len() != step * step * gw * gh {
             return Err("flat: file too short".into());
         }
-        Ok(Flat { w, h: hh, step, gw, gh, g, min: h["min"].as_f64().unwrap_or(0.0) as f32 })
+        let dark = h["dark"].as_array().map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+        Ok(Flat { w, h: hh, step, gw, gh, g, min: h["min"].as_f64().unwrap_or(0.0) as f32, dark })
     }
 
     /// For MStitch: no flat of its own (its frames are corrected already): ones, at quarter size (level 2).
@@ -222,13 +246,16 @@ impl Flat {
     }
 }
 
-/// The terms x^i y^j, i + j <= 4, at grid point (gi, gj) (x, y from -1 to 1).
-fn terms(gi: usize, gj: usize, gw: usize, gh: usize) -> [f64; 15] {
+const DEG: usize = 4;
+const NT: usize = (DEG + 1) * (DEG + 2) / 2;
+
+/// The terms x^i y^j, i + j <= DEG, at grid point (gi, gj) (x, y from -1 to 1).
+fn terms(gi: usize, gj: usize, gw: usize, gh: usize) -> [f64; NT] {
     let x = 2.0 * gi as f64 / (gw - 1).max(1) as f64 - 1.0;
     let y = 2.0 * gj as f64 / (gh - 1).max(1) as f64 - 1.0;
-    let mut t = [0.0; 15];
+    let mut t = [0.0; NT];
     let mut k = 0;
-    for d in 0..=4 {
+    for d in 0..=DEG {
         for j in 0..=d {
             t[k] = x.powi((d - j) as i32) * y.powi(j as i32);
             k += 1;
@@ -243,7 +270,7 @@ fn smooth(v: &[f32], gw: usize, gh: usize) -> Vec<f32> {
     let mut keep = vec![true; v.len()];
     let mut out = v.to_vec();
     for _ in 0..2 {
-        let mut a = [[0.0f64; 16]; 15];
+        let mut a = [[0.0f64; NT + 1]; NT];
         for gj in 0..gh {
             for gi in 0..gw {
                 let k = gj * gw + gi;
@@ -251,11 +278,11 @@ fn smooth(v: &[f32], gw: usize, gh: usize) -> Vec<f32> {
                     continue;
                 }
                 let t = terms(gi, gj, gw, gh);
-                for r in 0..15 {
-                    for c in 0..15 {
+                for r in 0..NT {
+                    for c in 0..NT {
                         a[r][c] += t[r] * t[c];
                     }
-                    a[r][15] += t[r] * v[k] as f64;
+                    a[r][NT] += t[r] * v[k] as f64;
                 }
             }
         }
@@ -281,26 +308,26 @@ fn smooth(v: &[f32], gw: usize, gh: usize) -> Vec<f32> {
     out
 }
 
-/// Gaussian elimination with partial pivoting on an augmented 15 x 16 system.
-fn solve(mut a: [[f64; 16]; 15]) -> Option<[f64; 15]> {
-    for col in 0..15 {
-        let piv = (col..15).max_by(|&i, &j| a[i][col].abs().partial_cmp(&a[j][col].abs()).unwrap())?;
+/// Gaussian elimination with partial pivoting on an augmented NT x (NT + 1) system.
+fn solve(mut a: [[f64; NT + 1]; NT]) -> Option<[f64; NT]> {
+    for col in 0..NT {
+        let piv = (col..NT).max_by(|&i, &j| a[i][col].abs().partial_cmp(&a[j][col].abs()).unwrap())?;
         if a[piv][col].abs() < 1e-12 {
             return None;
         }
         a.swap(col, piv);
-        for r in 0..15 {
+        for r in 0..NT {
             if r != col {
                 let f = a[r][col] / a[col][col];
-                for c in col..16 {
+                for c in col..NT + 1 {
                     a[r][c] -= f * a[col][c];
                 }
             }
         }
     }
-    let mut x = [0.0; 15];
-    for i in 0..15 {
-        x[i] = a[i][15] / a[i][i];
+    let mut x = [0.0; NT];
+    for i in 0..NT {
+        x[i] = a[i][NT] / a[i][i];
     }
     Some(x)
 }
@@ -314,7 +341,7 @@ pub struct Job {
 
 /// Nine frames on a 3 x 3 grid around here, half a field apart; back where it started afterwards.
 pub fn start(link: Arc<Link>, optics: Optics, settle_ms: f64, back_um: f64) -> Arc<Mutex<Job>> {
-    let st = Arc::new(Mutex::new(Job { done: 0, total: 9, stop: false, result: None }));
+    let st = Arc::new(Mutex::new(Job { done: 0, total: 27, stop: false, result: None }));
     let s2 = st.clone();
     std::thread::spawn(move || {
         let r = run(&link, &optics, settle_ms, back_um, &s2);
@@ -327,16 +354,18 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Job>) -
     let here = link.stage_pos().ok_or("no stage position yet")?;
     let f = o.field_um();
     let mut frames = vec![];
+    let mut exposure = None;
     link.call(json!({"cmd": "begin"}))?;
     let shot = (|| -> Result<(), String> {
-        for j in -1..=1 {
-            for i in -1..=1 {
+        for j in -2..=2 {
+            for i in -2..=2 {
                 if st.lock().unwrap().stop {
                     return Err("stopped".into());
                 }
-                let (x, y) = (here[0] + 0.5 * f[0] * i as f64, here[1] + 0.5 * f[1] * j as f64);
+                let (x, y) = (here[0] + 0.45 * f[0] * i as f64, here[1] + 0.45 * f[1] * j as f64);
                 link.call(json!({"cmd": "goto", "x": x - back_um, "y": y - back_um}))?;
                 let fr = link.snap(json!({"x": x, "y": y, "settle_ms": settle_ms}))?;
+                exposure = fr.meta["exp_us"].as_f64();
                 frames.push(pixels::unpack(&fr.meta, &fr.data)?);
                 st.lock().unwrap().done += 1;
             }
@@ -346,7 +375,31 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Job>) -
     let _ = link.call(json!({"cmd": "end"}));
     let _ = link.call(json!({"cmd": "goto", "x": here[0], "y": here[1]}));
     shot?;
-    Flat::from_frames(&frames)
+    // the dark level: the light off for a moment, two frames at the same exposure, the light back as it was.
+    // Not used if the exposure changed (automatic exposure) or it is not dark then (light from the room).
+    let mut dark = vec![];
+    let level = link.lamps().0;
+    if level > 0 && link.call(json!({"cmd": "light", "level": 0})).is_ok() {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        for _ in 0..2 {
+            if let Ok(fr) = link.snap(json!({"x": here[0], "y": here[1], "settle_ms": settle_ms})) {
+                if fr.meta["exp_us"].as_f64() == exposure {
+                    if let Ok(sn) = pixels::unpack(&fr.meta, &fr.data) {
+                        dark.push(sn);
+                    }
+                }
+            }
+            st.lock().unwrap().done += 1;
+        }
+        let _ = link.call(json!({"cmd": "light", "level": level}));
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let lit = frames[0].v.iter().map(|&v| v as f64).sum::<f64>() / frames[0].v.len() as f64;
+        let dk = dark.iter().map(|d| d.v.iter().map(|&v| v as f64).sum::<f64>() / d.v.len() as f64).fold(0.0, f64::max);
+        if dk > 0.25 * lit {
+            dark.clear();
+        }
+    }
+    Flat::from_frames(&frames, &dark)
 }
 
 #[cfg(test)]
@@ -374,14 +427,22 @@ mod tests {
                 for x in 0..w {
                     // the sample: mostly even, dark specks here and there (different in every frame)
                     let s = if rnd() < 0.03 { 0.3 } else { 1.0 };
-                    v[y * w + x] = (180.0 * light(x, y) * s) as u16;
+                    // and the sensor's dark level of 20 on top
+                    v[y * w + x] = (20.0 + 180.0 * light(x, y) * s) as u16;
                 }
             }
             frames.push(Sensor { w, h, bits: 8, fmt: "bayer_rg8".into(), v });
         }
-        let f = Flat::from_frames(&frames).unwrap();
-        let mut even = Sensor { w, h, bits: 8, fmt: "bayer_rg8".into(), v: (0..w * h).map(|k| (180.0 * light(k % w, k / w)) as u16).collect() };
-        assert!(f.apply(&mut even));
+        let dark = Sensor { w, h, bits: 8, fmt: "bayer_rg8".into(), v: vec![20; w * h] };
+        // a darker part of the sample (half as bright): without the dark level its edges stay darker; with it, even
+        let plain = Flat::from_frames(&frames, &[]).unwrap();
+        let mut e1 = Sensor { w, h, bits: 8, fmt: "bayer_rg8".into(), v: (0..w * h).map(|k| (20.0 + 90.0 * light(k % w, k / w)) as u16).collect() };
+        plain.apply(&mut e1, 1.0);
+        let (lo1, hi1) = e1.v.iter().fold((u16::MAX, 0u16), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!((hi1 - lo1) as f64 / (hi1 as f64) > 0.05, "without the dark level: {lo1}..{hi1}");
+        let f = Flat::from_frames(&frames, &[dark]).unwrap();
+        let mut even = Sensor { w, h, bits: 8, fmt: "bayer_rg8".into(), v: (0..w * h).map(|k| (20.0 + 90.0 * light(k % w, k / w)) as u16).collect() };
+        assert!(f.apply(&mut even, 1.0));
         let (lo, hi) = even.v.iter().fold((u16::MAX, 0u16), |(a, b), &v| (a.min(v), b.max(v)));
 
         // before: 180 * (1 - 0.6 * 0.25 * ...) at the corners, about 108..180; after: within 5 %
@@ -390,5 +451,6 @@ mod tests {
         f.save(&path).unwrap();
         let g = Flat::load(&path).unwrap();
         assert_eq!(g.g, f.g);
+        assert_eq!(g.dark, f.dark);
     }
 }

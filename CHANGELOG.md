@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.11
+- Flat field corrects better: the sensor's dark level is measured too (the light off for a moment, 2 frames at the same exposure, the light back as it was) and taken out before dividing, I' = (I - D) / F + D; without it the edges of darker parts of the sample stayed a little dark. 25 frames (5 x 5) instead of 9: less noise. Not used if the exposure changed while dark (automatic exposure) or it was not dark (room light).
+- Settings, *Flat field strength* (0.5 - 2, 1 as measured): the gain raised to this power, for what is left.
+
 ## 0.6.10
 - *Calibrate, Orientation* works on a plain substrate: the frames (here, a quarter field along x, along y) are compared whole (correlation, coarse to fine, the slow shading taken out first), so an edge, a corner or dust is enough; no texture needed. The scale (um/px) is measured as well, from any starting guess (on the simulator: 0.35 um/px turned and mirrored -> 0.2200, straight).
 - From a corner uses the same, so the scale is right there too.

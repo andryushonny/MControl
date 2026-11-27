@@ -70,7 +70,7 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 let flat_can = app.flat_job.is_none() && app.calib.is_none() && app.link.stage_pos().is_some();
                 if ui.add_enabled(flat_can, egui::Button::new("Flat field"))
-                    .on_hover_text("the frame darker to its edges (vignetting, uneven light): 9 frames around here, half a field apart, best on an even, clean part of the substrate (or a little out of focus), not saturated. Then live pictures and scans with this objective are corrected.")
+                    .on_hover_text("the frame darker to its edges (vignetting, uneven light): 25 frames around here (about half a field apart) and 2 with the light off for a moment, best on an even, clean part of the substrate (or a little out of focus), not saturated. Then live pictures and scans with this objective are corrected.")
                     .clicked()
                 {
                     app.start_flat();
@@ -589,7 +589,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     None => ui.label(RichText::new("off").weak()),
                 };
                 let can = app.flat_job.is_none() && app.calib.is_none() && app.link.stage_pos().is_some();
-                if ui.add_enabled(can, egui::Button::new("Measure here")).on_hover_text("9 frames around here, half a field apart, on an even part of the substrate, not saturated").clicked() {
+                if ui.add_enabled(can, egui::Button::new("Measure here")).on_hover_text("25 frames around here (about half a field apart) and 2 with the light off for a moment, on an even part of the substrate, not saturated").clicked() {
                     app.start_flat();
                 }
                 if app.proj.optics().flat.is_some() && ui.button("Off").clicked() {
@@ -597,6 +597,17 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
+            if app.proj.optics().flat.is_some() {
+                ui.label("Flat field strength");
+                ui.horizontal(|ui| {
+                    let r = ui.add(egui::Slider::new(&mut app.proj.optics_mut().flat_strength, 0.5..=2.0).fixed_decimals(2));
+                    if r.changed() {
+                        app.changed();
+                    }
+                    ui.label(RichText::new("1 as measured; more if the edges stay dark, less if they turn bright").weak().size(11.0));
+                });
+                ui.end_row();
+            }
             ui.label("White balance R G B");
             ui.horizontal(|ui| {
                 let mut g = app.proj.wb;

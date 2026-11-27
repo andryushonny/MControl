@@ -167,7 +167,7 @@ fn run(link: &Link, job: &Mutex<Job>, rows: &[Vec<P2>], s: &Settings, dir: &Path
                 // the lens's distortion out before stitching: MStitch gets frames with straight lines
                 // the flat field first (it belongs to the sensor), then the distortion
                 let mut raw = shot.sensor;
-                let flat = s.optics.flat.as_ref().is_some_and(|fl| fl.apply(&mut raw));
+                let flat = s.optics.flat.as_ref().is_some_and(|fl| fl.apply(&mut raw, s.optics.flat_strength as f32));
                 let sensor = raw.undistorted(&s.optics);
                 let mut meta = f.meta.clone();
                 if flat {
@@ -506,7 +506,7 @@ mod e2e_lens {
         };
         println!("calibration: {fit:?}");
         {
-            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None, flat_file: None, flat: None };
+            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0 };
             let ms = crate::calib::DEBUG.lock().unwrap().clone();
             let mut res: Vec<f64> = ms.iter().map(|m| {
                 let (a, b) = (truth.undistort(m.p0), truth.undistort(m.p1));

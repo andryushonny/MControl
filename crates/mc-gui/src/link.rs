@@ -184,8 +184,10 @@ impl Link {
                 if let Ok(mut sensor) = pixels::unpack(&f.meta, &f.data) {
                     let div = 2;
                     let look = self.state.lock().unwrap().look.clone();
-                    if let Some(fl) = look.as_ref().and_then(|(o, _)| o.flat.as_ref()) {
-                        fl.apply(&mut sensor);
+                    if let Some((o, _)) = look.as_ref() {
+                        if let Some(fl) = &o.flat {
+                            fl.apply(&mut sensor, o.flat_strength as f32);
+                        }
                     }
                     let mut rgb = sensor.rgb(div);
                     if let Some((o, wb)) = look {
