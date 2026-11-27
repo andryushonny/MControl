@@ -76,6 +76,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if let (Some(p), Some(raw)) = (app.maps.get_mut(&m), app.map_raw.get(&m)) {
                 // where the map stands: as stitched, then Align's correction
                 p.to_stage = s.fix.map(|f| raw.then(&f)).unwrap_or(*raw);
+                let a = (s.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+                p.tint = Color32::from_white_alpha(a);
                 missing |= p.draw(&ctx, &painter, &view, app.frame_no, &mut budget);
             }
         }
@@ -202,6 +204,24 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
     let frac = if shift { 0.1 } else if ctrl { 1.0 } else { app.arrow_frac };
     // an arrow moves the picture that way on the screen, however the view is turned or mirrored
+    // Move map: the arrows move that selection's map, one map pixel (Shift: ten), not the stage
+    if let Some(id) = app.nudging {
+        if ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape)) {
+            app.nudging = None;
+            app.message = "map moved; Align maps to the lattice refines it".into();
+            return;
+        }
+        let px = app.proj.sample().selections.iter().find(|s| s.id == id).and_then(|s| app.map_of(s)).map(|(_, a)| a.scale()).unwrap_or(1.0);
+        let step = px * if shift { 10.0 } else { 1.0 };
+        for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
+            if ui.input(|i| i.key_pressed(k)) {
+                let s = view.dir_to_stage([dx, dy]);
+                let n = geom::len(s);
+                app.nudge(id, geom::mul(s, step / n));
+            }
+        }
+        return;
+    }
     let mut d = [0.0, 0.0];
     for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
         if ui.input(|i| i.key_pressed(k)) {

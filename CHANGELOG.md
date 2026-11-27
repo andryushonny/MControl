@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.8
+- *Move map* on a selection: the arrows move its map by hand (1 map pixel, Shift 10), not the stage; Enter or Esc: done. To bring neighbouring selections together before Align.
+- Align continues from where a map stands now (a shift by hand included) instead of from the stitched placement.
+- Opacity per selection (slider on its card): on the map and in the exported squares (PNG alpha, shown by AutoCAD); saved in the project.
+
 ## 0.5.7
 - Top bar, *Calibrate* menu: **Orientation** (3 frames: how the camera is turned or mirrored against the stage, and its scale; the distortion kept), **Distortion** (9 frames: k1, k2 with orientation and scale), **White balance** (the live picture made grey).
 

@@ -50,6 +50,13 @@ pub struct Selection {
     /// the objective it is scanned with (a name from the project's objectives)
     #[serde(default)]
     pub objective: String,
+    /// how opaque its map is drawn and exported (0..1)
+    #[serde(default = "opaque")]
+    pub opacity: f32,
+}
+
+fn opaque() -> f32 {
+    1.0
 }
 
 impl Selection {
@@ -285,6 +292,7 @@ impl Project {
             scans: vec![],
             fix: None,
             objective,
+            opacity: 1.0,
         });
         id
     }

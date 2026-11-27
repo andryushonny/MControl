@@ -117,6 +117,8 @@ pub struct App {
     pub label_edits: HashMap<usize, (String, String)>,
     /// a focus search by hand, running (None) or done
     pub focusing: Option<Arc<Mutex<Option<Result<(f64, f64, usize), String>>>>>,
+    /// the selection whose map the arrows move by hand (Move map)
+    pub nudging: Option<u32>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -177,6 +179,7 @@ impl App {
             objective_hint: None,
             label_edits: HashMap::new(),
             focusing: None,
+            nudging: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -254,11 +257,16 @@ impl App {
                 report.push(format!("{}: map not loaded yet", s.name));
                 continue;
             };
-            match align::align(&l, &s.rect, p.pyr.base(), raw) {
+            // from where the map stands now (a shift by hand included), not from scratch
+            let now = s.fix.map(|f| raw.then(&f)).unwrap_or(*raw);
+            match align::align(&l, &s.rect, p.pyr.base(), &now) {
                 Ok(a) => {
                     report.push(format!("{}: {} crosses, moved {:.2} um, left {:.2} um", s.name, a.crosses, a.moved_um, a.rms_um));
                     if let Some(x) = self.proj.selection_mut(s.id) {
-                        x.fix = Some(a.fix);
+                        x.fix = Some(match x.fix {
+                            Some(f) => f.then(&a.fix),
+                            None => a.fix,
+                        });
                     }
                 }
                 Err(e) => report.push(format!("{}: {e}, left as stitched", s.name)),
@@ -568,6 +576,18 @@ impl App {
         self.message = "looking for focus...".into();
     }
 
+    /// Move a selection's map by hand by `d` um on the stage (before Align, to bring it near).
+    pub fn nudge(&mut self, id: u32, d: P2) {
+        if let Some(s) = self.proj.selection_mut(id) {
+            let t = geom::Affine([1.0, 0.0, d[0], 0.0, 1.0, d[1]]);
+            s.fix = Some(match s.fix {
+                Some(f) => f.then(&t),
+                None => t,
+            });
+        }
+        self.changed();
+    }
+
     /// Stop: the stage, the scan running (its frames so far are kept), and the queue pauses.
     pub fn stop_all(&mut self) {
         self.link.send(serde_json::json!({"cmd": "stop"}));
@@ -607,7 +627,7 @@ impl App {
         // every selection with a map: one layer each, all on the same lattice
         for s in sample.selections.iter() {
             match self.map_of(s) {
-                Some((p, a)) => items.push((s.name.clone(), s.color, s.rect, p.pyr.clone(), a)),
+                Some((p, a)) => items.push((s.name.clone(), s.color, s.rect, p.pyr.clone(), a, s.opacity)),
                 None => skipped.push(s.name.clone()),
             }
         }
@@ -625,9 +645,9 @@ impl App {
         std::thread::spawn(move || {
             let r = (|| -> Result<PathBuf, String> {
                 let mut layers = vec![];
-                for (k, (name, color, rect, pyr, a)) in items.iter().enumerate() {
+                for (k, (name, color, rect, pyr, a, opacity)) in items.iter().enumerate() {
                     st.lock().unwrap().stage = format!("cutting {name}");
-                    let src = export::Source { rect: *rect, map: pyr.base(), to_stage: *a };
+                    let src = export::Source { rect: *rect, map: pyr.base(), to_stage: *a, opacity: *opacity };
                     let umpp = a.scale();
                     let dir = out.join("squares").join(export::layer_name(name));
                     let sq = export::cut(&src, &lat, orient, umpp, &dir, &mut |_, _| {})?;

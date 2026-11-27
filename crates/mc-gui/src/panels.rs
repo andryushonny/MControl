@@ -187,6 +187,7 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                 let nq = app.frames_for(&sel_now, Mode::Quick);
                 let nh = app.frames_for(&sel_now, Mode::Quality);
                 let objectives: Vec<String> = app.proj.objectives.iter().map(|o| o.objective.clone()).collect();
+                let nudging = app.nudging;
                 let focused = app.focus == Some(app.proj.sample().selections[k].id);
                 let mut changed = false;
                 let frame = egui::Frame::group(ui.style()).fill(if focused { Color32::from_gray(48) } else { Color32::TRANSPARENT });
@@ -200,6 +201,10 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                         }
                         changed |= ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(110.0)).changed();
                         changed |= ui.checkbox(&mut s.visible, "").on_hover_text("shown on the map (export takes every selection with a map)").changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Opacity").size(11.0));
+                        changed |= ui.add(egui::Slider::new(&mut s.opacity, 0.0..=1.0).show_value(true)).on_hover_text("on the map and in the exported squares").changed();
                     });
                     let c = s.rect.center();
                     let z = s.rect.size();
@@ -257,6 +262,10 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                         if ui.small_button("Show").clicked() {
                             action = Some((k, "show"));
                         }
+                        let moving = nudging == Some(s.id);
+                        if ui.selectable_label(moving, "Move map").on_hover_text("the arrows move this map (1 px, Shift 10 px), not the stage; Enter: done").clicked() {
+                            action = Some((k, "nudge"));
+                        }
                         if ui.small_button("Delete").clicked() {
                             action = Some((k, "delete"));
                         }
@@ -278,6 +287,12 @@ pub fn left(app: &mut App, ui: &mut egui::Ui) {
                 "go" => {
                     let c = rect.center();
                     app.link.send(json!({"cmd": "goto", "x": c[0], "y": c[1]}));
+                }
+                "nudge" => {
+                    app.nudging = if app.nudging == Some(id) { None } else { Some(id) };
+                    if app.nudging.is_some() {
+                        app.message = format!("moving the map of {}: arrows (Shift: x10), Enter: done", app.proj.sample().selections[k].name);
+                    }
                 }
                 "show" => {
                     app.center = rect.center();

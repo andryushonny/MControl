@@ -15,6 +15,8 @@ pub struct Source<'a> {
     pub map: &'a Rgb,
     /// map pixel -> stage
     pub to_stage: Affine,
+    /// 0..1: how opaque its squares are (the alpha of the PNGs)
+    pub opacity: f32,
 }
 
 pub struct Square {
@@ -108,7 +110,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
                 let o4 = (q * nx + pp) * 4;
                 match px {
                     Some(c) => {
-                        rgba[o4..o4 + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
+                        rgba[o4..o4 + 4].copy_from_slice(&[c[0], c[1], c[2], (src.opacity.clamp(0.0, 1.0) * 255.0).round().max(1.0) as u8]);
                         filled += 1;
                     }
                     None => rgba[o4..o4 + 4].copy_from_slice(&[0, 0, 0, 0]),
@@ -246,7 +248,7 @@ mod tests {
         let rect = Rect { x0: 120.0, y0: 215.0, x1: 300.0, y1: 380.0 };
         let dir = std::env::temp_dir().join(format!("mc-cut-{}", std::process::id()));
         let o = Orient::of(&l, false, false, false, 0.0);
-        let sq = cut(&Source { rect, map: &map, to_stage }, &l, o, umpp, &dir, &mut |_, _| {}).unwrap();
+        let sq = cut(&Source { rect, map: &map, to_stage, opacity: 1.0 }, &l, o, umpp, &dir, &mut |_, _| {}).unwrap();
         assert!(!sq.is_empty());
         for s in &sq {
             let img = crate::pixels::read_png(&s.file).unwrap();

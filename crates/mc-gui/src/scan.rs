@@ -409,7 +409,7 @@ mod e2e {
         proj.save().unwrap();
         let o = crate::export::Orient::of(&l, false, false, false, 0.0);
         let dir = out.join("export");
-        let sq = crate::export::cut(&crate::export::Source { rect, map: &map, to_stage: a }, &l, o, umpp, &dir.join("squares/Sel"), &mut |_, _| {}).unwrap();
+        let sq = crate::export::cut(&crate::export::Source { rect, map: &map, to_stage: a, opacity: 1.0 }, &l, o, umpp, &dir.join("squares/Sel"), &mut |_, _| {}).unwrap();
         crate::export::write_dxf(&dir.join("drawing.dxf"), &l, o, &[("Sel".into(), [255, 80, 80], rect, sq)], &rect).unwrap();
     }
 }
@@ -557,7 +557,7 @@ mod e2e_lens {
         for (n, (m, a)) in maps.iter().enumerate() {
             let fixed = a.then(proj.sample().selections[n].fix.as_ref().unwrap());
             let dir = out.join(format!("export/squares/S{n}"));
-            let sq = crate::export::cut(&crate::export::Source { rect: rects[n], map: m, to_stage: fixed }, &l, o, fixed.scale(), &dir, &mut |_, _| {}).unwrap();
+            let sq = crate::export::cut(&crate::export::Source { rect: rects[n], map: m, to_stage: fixed, opacity: 1.0 }, &l, o, fixed.scale(), &dir, &mut |_, _| {}).unwrap();
             layers.push((format!("S{n}"), [255, 80, 80], rects[n], sq));
         }
         crate::export::write_dxf(&out.join("export/drawing.dxf"), &l, o, &layers, &rects[0].union(&rects[1])).unwrap();
