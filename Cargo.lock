@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "mc-client"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "mc-proto",
  "serde_json",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "mc-gui"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "chrono",
  "eframe",
@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "mc-proto"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "libc",
  "serde_json",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "mc-server"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ctrlc",
  "jpeg-encoder",

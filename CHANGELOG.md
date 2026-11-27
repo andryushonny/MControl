@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.3
+- *Keys* window (top bar): every action and its key in one table — stage arrows, Z (two pairs, Shift x5), Stop, light, laser on / off, focus here, snap, follow, fit, the tools, cancel / done. *Change*, then press the key (with Shift / Ctrl if wanted); *None* takes the key away, *Default* gives back the original, *All back to the defaults*. A key used by two actions is red. Kept for next time; the button names show the current keys.
+
 ## 0.6.2
 - Camera orientation without tilt: *Orientation* picks one of the 8 straight ways only (0/90/180/270 degrees, mirrored or not) and the scale; buttons *Rotate 90*, *Rotate 180*, *Mirror x*, *Mirror y*, *Straight* (takes a tilt away); the current orientation is shown.
 - Controls, the arrows: *Exchange left with right*, *up with down*, *swap* (up moves right, down left, right up, left down) — only which way they move the stage, the picture stays; on top of taught arrows too.

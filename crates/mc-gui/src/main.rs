@@ -9,6 +9,7 @@ mod drawing;
 mod export;
 mod focus;
 mod geom;
+mod keys;
 mod link;
 mod map;
 mod panels;
@@ -136,6 +137,10 @@ pub struct App {
     /// when the work was last told to the server (for its web page), and when the last scan ended
     pub told: Instant,
     pub finished: Option<String>,
+    /// every action's key (the Keys window), and the action waiting for its new key
+    pub keys: keys::Keys,
+    pub keys_open: bool,
+    pub capturing: Option<keys::Act>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -207,6 +212,9 @@ impl App {
             nudging: None,
             told: Instant::now(),
             finished: None,
+            keys: keys::Keys::load(stored("keys")),
+            keys_open: false,
+            capturing: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -839,6 +847,7 @@ impl eframe::App for App {
         panels::settings(self, ui.ctx());
         panels::queue(self, ui.ctx());
         panels::controls(self, ui.ctx());
+        panels::keys_window(self, ui.ctx());
         panels::objective_hint(self, ui.ctx());
         if self.dirty {
             self.dirty = false;
@@ -862,6 +871,7 @@ impl eframe::App for App {
         storage.set_string("arrow_rev_y", self.arrow_rev_y.to_string());
         storage.set_string("arrow_dirs", serde_json::to_string(&self.arrow_dirs).unwrap_or_default());
         storage.set_string("view_rot", self.view_rot.to_string());
+        storage.set_string("keys", self.keys.save());
         storage.set_string("arrow_frac", self.arrow_frac.to_string());
     }
 }

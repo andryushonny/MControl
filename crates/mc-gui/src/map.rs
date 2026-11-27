@@ -3,8 +3,9 @@
 
 use crate::geom::{self, Rect, P2};
 use crate::picture::View;
+use crate::keys::Act;
 use crate::{cross, export, scan, thumb_picture, App, Tool};
-use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Sense, Shape, Stroke};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Sense, Shape, Stroke};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if resp.has_focus() {
         resp.surrender_focus();
     }
-    if !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(Key::Home)) {
+    if !ui.ctx().text_edit_focused() && app.capturing.is_none() && app.keys.pressed(ui, Act::Fit) {
         app.fit = true;
     }
     let turn = app.view_turn();
@@ -57,7 +58,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     view.center = app.center;
-    if !ui.ctx().text_edit_focused() {
+    if !ui.ctx().text_edit_focused() && app.capturing.is_none() {
         keys(app, ui, stage, &view);
     }
 
@@ -144,7 +145,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             }
-            if ui.input(|i| i.key_pressed(Key::Escape)) {
+            if app.keys.pressed(ui, Act::Cancel) {
                 app.anchor = None;
             }
         }
@@ -206,15 +207,15 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     // an arrow moves the picture that way on the screen, however the view is turned or mirrored
     // Move map: the arrows move that selection's map, one map pixel (Shift: ten), not the stage
     if let Some(id) = app.nudging {
-        if ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape)) {
+        if app.keys.pressed(ui, Act::Done) || app.keys.pressed(ui, Act::Cancel) {
             app.nudging = None;
             app.message = "map moved; Align maps to the lattice refines it".into();
             return;
         }
         let px = app.proj.sample().selections.iter().find(|s| s.id == id).and_then(|s| app.map_of(s)).map(|(_, a)| a.scale()).unwrap_or(1.0);
         let step = px * if shift { 10.0 } else { 1.0 };
-        for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
-            if ui.input(|i| i.key_pressed(k)) {
+        for (k, dx, dy) in [(Act::Left, -1.0, 0.0), (Act::Right, 1.0, 0.0), (Act::Up, 0.0, -1.0), (Act::Down, 0.0, 1.0)] {
+            if app.keys.pressed(ui, k) {
                 let s = view.dir_to_stage([dx, dy]);
                 let n = geom::len(s);
                 app.nudge(id, geom::mul(s, step / n));
@@ -223,7 +224,7 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
         return;
     }
     let mut d = [0.0, 0.0];
-    for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
+    for (k, dx, dy) in [(Act::Left, -1.0, 0.0), (Act::Right, 1.0, 0.0), (Act::Up, 0.0, -1.0), (Act::Down, 0.0, 1.0)] {
         // the arrows as set in Settings: exchanged, reversed
         // the arrows as set in Controls: exchanged, reversed (the picture stays as it is)
         // swap: up moves as right did, down as left, right as up, left as down (screen y grows down)
@@ -232,14 +233,14 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
         let dy = if app.arrow_rev_y { -dy } else { dy };
         if let Some([r, u]) = app.arrow_dirs {
             // taught arrows: right / up as the operator sees the stage, whatever the screen shows
-            if ui.input(|i| i.key_pressed(k)) {
+            if app.keys.pressed(ui, k) {
                 let s = [dx * r[0] - dy * u[0], dx * r[1] - dy * u[1]];
                 let step = f[0].min(f[1]) * frac;
                 d = geom::add(d, geom::mul(s, step / geom::len(s).max(1e-9)));
             }
             continue;
         }
-        if ui.input(|i| i.key_pressed(k)) {
+        if app.keys.pressed(ui, k) {
             let s = view.dir_to_stage([dx, dy]);
             let n = geom::len(s);
             let step = if dx != 0.0 { f[0] } else { f[1] } * frac;
@@ -254,24 +255,32 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     }
     // focus by hand: the . / , keys (with > / < on them) or PageUp / PageDown move z by the step in Settings;
     // with Shift held (> and < themselves) five steps
-    for (k, sign) in [(Key::PageUp, 1.0), (Key::PageDown, -1.0), (Key::Period, 1.0), (Key::Comma, -1.0)] {
-        if ui.input(|i| i.key_pressed(k)) && stage.is_some() {
+    for (k, sign) in [(Act::ZUp2, 1.0), (Act::ZDown2, -1.0), (Act::ZUp, 1.0), (Act::ZDown, -1.0)] {
+        if app.keys.pressed(ui, k) && stage.is_some() {
             let step = app.proj.scan.z_step_um * if shift { 5.0 } else { 1.0 };
             app.link.send(json!({"cmd": "move", "dz": sign * step}));
         }
     }
-    if ui.input(|i| i.key_pressed(Key::Space)) {
+    if app.keys.pressed(ui, Act::Stop) {
         app.stop_all();
     }
-    // F2: light on/off; Shift+F3: laser on, F3: laser off (on needs Shift, so it is never switched on by mistake)
-    if ui.input(|i| i.key_pressed(Key::F2)) {
+    if app.keys.pressed(ui, Act::Light) {
         app.toggle_light();
     }
-    if ui.input(|i| i.key_pressed(Key::F3)) {
-        app.laser(shift && app.link.lamps().1 == 0);
+    if app.keys.pressed(ui, Act::LaserOn) {
+        app.laser(true);
     }
-    if ui.input(|i| i.key_pressed(Key::F)) {
+    if app.keys.pressed(ui, Act::LaserOff) {
+        app.laser(false);
+    }
+    if app.keys.pressed(ui, Act::Follow) {
         app.follow = true;
+    }
+    if app.keys.pressed(ui, Act::Focus) {
+        app.focus_here();
+    }
+    if app.keys.pressed(ui, Act::Snap) {
+        app.link.send(json!({"cmd": "snap"}));
     }
 }
 

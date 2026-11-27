@@ -9,15 +9,18 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
     egui::Panel::top("top").show(ui, |ui| {
         ui.horizontal(|ui| {
 
-            for (t, name, key) in [(Tool::Explore, "Explore", "E"), (Tool::Select, "Select", "S"), (Tool::Lattice, "Lattice", "L")] {
-                if ui.selectable_label(app.tool == t, format!("{name} ({key})")).clicked() {
+            use crate::keys::Act;
+            for (t, name, act) in [(Tool::Explore, "Explore", Act::Explore), (Tool::Select, "Select", Act::Select), (Tool::Lattice, "Lattice", Act::Lattice)] {
+                let k = app.keys.text(act);
+                let label = if k.is_empty() { name.to_string() } else { format!("{name} ({k})") };
+                if ui.selectable_label(app.tool == t, label).clicked() {
                     app.tool = t;
                     app.anchor = None;
                 }
             }
-            if !ui.ctx().text_edit_focused() {
-                for (k, t) in [(egui::Key::E, Tool::Explore), (egui::Key::S, Tool::Select), (egui::Key::L, Tool::Lattice)] {
-                    if ui.input(|i| i.key_pressed(k)) {
+            if !ui.ctx().text_edit_focused() && app.capturing.is_none() {
+                for (k, t) in [(Act::Explore, Tool::Explore), (Act::Select, Tool::Select), (Act::Lattice, Tool::Lattice)] {
+                    if app.keys.pressed(ui, k) {
                         app.tool = t;
                         app.anchor = None;
                     }
@@ -27,7 +30,7 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             if ui.button("Snap").on_hover_text("one frame, kept in the preview").clicked() {
                 app.link.send(json!({"cmd": "snap"}));
             }
-            if ui.button(RichText::new("Stop (Space)").color(Color32::from_rgb(255, 120, 100))).on_hover_text("stops the stage and the scan; the queue pauses").clicked() {
+            if ui.button(RichText::new(with_key("Stop", app.keys.text(crate::keys::Act::Stop))).color(Color32::from_rgb(255, 120, 100))).on_hover_text("stops the stage and the scan; the queue pauses").clicked() {
                 app.stop_all();
             }
             let (light, laser_mw, _) = app.link.lamps();
@@ -42,6 +45,9 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             let busy_f = app.focusing.is_some();
             if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: . and , keys (Shift: x5)").clicked() {
                 app.focus_here();
+            }
+            if ui.button("Keys").on_hover_text("every action and its key, to change").clicked() {
+                app.keys_open = !app.keys_open;
             }
             if ui.button("Controls").on_hover_text("how the picture stands on the screen and which way the arrows move the stage, to your liking").clicked() {
                 app.controls_open = !app.controls_open;
@@ -62,10 +68,10 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                     ui.close();
                 }
             });
-            if ui.button("Follow (F)").clicked() {
+            if ui.button(with_key("Follow", app.keys.text(crate::keys::Act::Follow))).clicked() {
                 app.follow = true;
             }
-            if ui.button("Fit (Home)").on_hover_text("the whole sample").clicked() {
+            if ui.button(with_key("Fit", app.keys.text(crate::keys::Act::Fit))).on_hover_text("the whole sample").clicked() {
                 app.fit = true;
             }
             if ui.button("Clear preview").on_hover_text("forget the small pictures of where the camera has been (stitched maps stay)").clicked() {
@@ -1014,4 +1020,70 @@ pub fn controls(app: &mut App, ctx: &egui::Context) {
         ui.label(RichText::new(format!("now: turned {ang:.1} deg{}, {:.4} um/px", if mirror { ", mirrored" } else { "" }, app.proj.optics().um_per_px())).monospace().size(11.0));
     });
     app.controls_open = open;
+}
+
+/// The keys: every action and the key that does it; Change, then press the key (with Shift / Ctrl if wanted).
+pub fn keys_window(app: &mut App, ctx: &egui::Context) {
+    use crate::keys::{Bind, ALL};
+    let mut open = app.keys_open;
+    // a key pressed while waiting for one: it becomes the binding
+    if let Some(act) = app.capturing {
+        let got = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. } => Some(Bind { key: *key, shift: modifiers.shift, ctrl: modifiers.command }),
+                _ => None,
+            })
+        });
+        if let Some(b) = got {
+            app.keys.set(act, Some(b));
+            app.capturing = None;
+        }
+    }
+    egui::Window::new("Keys").open(&mut open).default_width(520.0).show(ctx, |ui| {
+        ui.label(RichText::new("Change, then press the key (Shift / Ctrl with it if wanted). Red: the same key does two things. Kept for next time.").weak().size(11.5));
+        let clashes = app.keys.clashes();
+        egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
+            egui::Grid::new("keys").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for a in ALL {
+                    ui.label(a.label());
+                    let t = app.keys.text(a);
+                    let txt = if app.capturing == Some(a) { RichText::new("press a key...").color(Color32::from_rgb(250, 200, 80)) }
+                        else if t.is_empty() { RichText::new("none").weak() }
+                        else if clashes.contains(&a) { RichText::new(t).monospace().color(Color32::from_rgb(240, 90, 70)) }
+                        else { RichText::new(t).monospace().strong() };
+                    ui.label(txt);
+                    ui.horizontal(|ui| {
+                        if app.capturing == Some(a) {
+                            if ui.small_button("Cancel").clicked() {
+                                app.capturing = None;
+                            }
+                        } else if ui.small_button("Change").clicked() {
+                            app.capturing = Some(a);
+                        }
+                        if ui.small_button("None").clicked() {
+                            app.keys.set(a, None);
+                        }
+                        if ui.small_button("Default").clicked() {
+                            app.keys.reset(a);
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+        });
+        ui.separator();
+        if ui.button("All back to the defaults").clicked() {
+            app.keys = crate::keys::Keys::defaults();
+            app.capturing = None;
+        }
+    });
+    if !open {
+        app.capturing = None;
+    }
+    app.keys_open = open;
+}
+
+/// "Stop (Space)", or "Stop" when the action has no key.
+fn with_key(name: &str, key: String) -> String {
+    if key.is_empty() { name.to_string() } else { format!("{name} ({key})") }
 }
