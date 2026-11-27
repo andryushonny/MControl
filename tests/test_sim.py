@@ -121,4 +121,4 @@ def test_guard_makes_it_safe():
     time.sleep(4.5)
     os.kill(p.pid, 9)
     out = open(p.logfile, errors="replace").read()
-    assert "safe state set" in out
+    assert "Safe state set" in out
