@@ -23,7 +23,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.fit = false;
         if let Some(e) = app.proj.sample().extent() {
             // the sample's box as it stands on the (maybe turned) screen, at 1 px per um
-            let unit = View { center: e.center(), scale: 1.0, rect, flip_x: app.flip_x, flip_y: app.flip_y, turn };
+            let unit = View { center: e.center(), scale: 1.0, rect, flip_x: app.flip_x, flip_y: app.flip_y, swap: app.swap, turn };
             let c = e.corners().map(|q| unit.dir_to_screen(geom::sub(q, e.center())));
             let zw = c.iter().map(|q| q[0]).fold(f64::MIN, f64::max) - c.iter().map(|q| q[0]).fold(f64::MAX, f64::min);
             let zh = c.iter().map(|q| q[1]).fold(f64::MIN, f64::max) - c.iter().map(|q| q[1]).fold(f64::MAX, f64::min);
@@ -32,7 +32,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             app.follow = false;
         }
     }
-    let mut view = View { center: app.center, scale: app.scale, rect, flip_x: app.flip_x, flip_y: app.flip_y, turn };
+    let mut view = View { center: app.center, scale: app.scale, rect, flip_x: app.flip_x, flip_y: app.flip_y, swap: app.swap, turn };
     let ctx = ui.ctx().clone();
     let stage = app.link.stage_pos();
 
@@ -309,7 +309,7 @@ fn lattice(painter: &egui::Painter, view: &View, l: &geom::Lattice, sample: &cra
     let cell_px = geom::len(l.a) * view.scale;
     if cell_px > 40.0 && sample.crosses.iter().filter(|c| c.label.is_some()).count() >= 2 {
         let size = (cell_px / 9.0).clamp(10.0, 20.0) as f32;
-        let orient = export::Orient::of(l, view.flip_x, view.flip_y, view.turn);
+        let orient = export::Orient::of(l, view.flip_x, view.flip_y, view.swap, view.turn);
         for c in &cells {
             let (i, j) = (c[0] as f64, c[1] as f64);
             let corners = [l.at(i, j), l.at(i + 1.0, j), l.at(i + 1.0, j + 1.0), l.at(i, j + 1.0)].map(|p| view.to_screen(p));

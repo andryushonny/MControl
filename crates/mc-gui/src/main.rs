@@ -75,6 +75,7 @@ pub struct App {
     pub scale: f64,
     pub flip_x: bool,
     pub flip_y: bool,
+    pub swap: bool,
     pub tool: Tool,
     pub anchor: Option<P2>,
     pub focus: Option<u32>,
@@ -146,6 +147,7 @@ impl App {
             scale: 0.25,
             flip_x: stored("flip_x").as_deref() == Some("true"),
             flip_y: stored("flip_y").as_deref() == Some("true"),
+            swap: stored("swap").as_deref() == Some("true"),
             tool: Tool::Explore,
             anchor: None,
             focus: None,
@@ -221,7 +223,7 @@ impl App {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
             return;
         };
-        let v = picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: self.flip_x, flip_y: self.flip_y, turn: 0.0 };
+        let v = picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: self.flip_x, flip_y: self.flip_y, swap: self.swap, turn: 0.0 };
         let d = v.dir_to_screen(l.a);
         let mut t = -d[1].atan2(d[0]).to_degrees();
         while t > 45.0 {
@@ -564,7 +566,7 @@ impl App {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
             return;
         };
-        let orient = export::Orient::of(&lat, self.flip_x, self.flip_y, sample.turn_deg.to_radians());
+        let orient = export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, sample.turn_deg.to_radians());
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];
@@ -685,6 +687,7 @@ impl eframe::App for App {
         storage.set_string("project", self.proj.folder.display().to_string());
         storage.set_string("flip_x", self.flip_x.to_string());
         storage.set_string("flip_y", self.flip_y.to_string());
+        storage.set_string("swap", self.swap.to_string());
         storage.set_string("arrow_frac", self.arrow_frac.to_string());
     }
 }

@@ -491,7 +491,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     let [a, b, c, d] = app.proj.optics().m;
                     let det = a * d - b * c;
                     let ux = [d / det, -c / det];
-                    let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: app.flip_x, flip_y: app.flip_y, turn: 0.0 };
+                    let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: app.flip_x, flip_y: app.flip_y, swap: app.swap, turn: 0.0 };
                     let sd = v.dir_to_screen(ux);
                     app.proj.sample_mut().turn_deg = -sd[1].atan2(sd[0]).to_degrees();
                     app.fit = true;
@@ -592,10 +592,11 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.label("Arrow step, part of the field");
             ui.add(egui::Slider::new(&mut app.arrow_frac, 0.1..=1.0));
             ui.end_row();
-            ui.label("Mirror the view");
+            ui.label("Stage on the screen: mirror");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut app.flip_x, "x");
                 ui.checkbox(&mut app.flip_y, "y");
+                ui.checkbox(&mut app.swap, "swap x and y").on_hover_text("the stage's x drawn up and down, y left and right: as the stage stands in front of you");
             });
             ui.end_row();
             ui.label("Live preview fps");

@@ -34,8 +34,8 @@ pub struct Orient {
 
 impl Orient {
     /// From the view (mirroring and turn included).
-    pub fn of(l: &Lattice, flip_x: bool, flip_y: bool, turn: f64) -> Orient {
-        let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: eframe::egui::Rect::ZERO, flip_x, flip_y, turn };
+    pub fn of(l: &Lattice, flip_x: bool, flip_y: bool, swap: bool, turn: f64) -> Orient {
+        let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: eframe::egui::Rect::ZERO, flip_x, flip_y, swap, turn };
         let (a, b) = (v.dir_to_screen(l.a), v.dir_to_screen(l.b));
         let swap = b[0].abs() > a[0].abs();
         let (h, vert) = if swap { (b, a) } else { (a, b) };
@@ -216,7 +216,7 @@ mod tests {
         let cross = |x: f64, y: f64, l: [i32; 2]| ([x, y], l);
         // screen y grows down: X growing upwards means the stage point of (16,16) is above (15,16)
         let l = Lattice::fit(&[cross(0.0, 0.0, [15, 16]), cross(100.0, 0.0, [15, 17])]).unwrap();
-        let o = Orient::of(&l, false, false, 0.0);
+        let o = Orient::of(&l, false, false, false, 0.0);
         assert!(o.swap, "{o:?}");
         // the cell between crosses (14..15, 16..17): its top left on the screen is the cross (15,16)
         let c = l.coords([1.0, 1.0]); // a point just right of and below (15,16)
@@ -245,7 +245,7 @@ mod tests {
         }
         let rect = Rect { x0: 120.0, y0: 215.0, x1: 300.0, y1: 380.0 };
         let dir = std::env::temp_dir().join(format!("mc-cut-{}", std::process::id()));
-        let o = Orient::of(&l, false, false, 0.0);
+        let o = Orient::of(&l, false, false, false, 0.0);
         let sq = cut(&Source { rect, map: &map, to_stage }, &l, o, umpp, &dir, &mut |_, _| {}).unwrap();
         assert!(!sq.is_empty());
         for s in &sq {

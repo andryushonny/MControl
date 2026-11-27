@@ -407,7 +407,7 @@ mod e2e {
         println!("lattice pitch {:?} um, rms {:.3} um", l.pitch(), l.rms_um);
         assert!((l.pitch()[0] - 100.0).abs() < 0.3 && (l.pitch()[1] - 100.0).abs() < 0.3);
         proj.save().unwrap();
-        let o = crate::export::Orient::of(&l, false, false, 0.0);
+        let o = crate::export::Orient::of(&l, false, false, false, 0.0);
         let dir = out.join("export");
         let sq = crate::export::cut(&crate::export::Source { rect, map: &map, to_stage: a }, &l, o, umpp, &dir.join("squares/Sel"), &mut |_, _| {}).unwrap();
         crate::export::write_dxf(&dir.join("drawing.dxf"), &l, o, &[("Sel".into(), [255, 80, 80], rect, sq)], &rect).unwrap();
@@ -552,7 +552,7 @@ mod e2e_lens {
             proj.sample_mut().selections[n].fix = Some(al.fix);
         }
         // 5. cut both on the one lattice, the drawing
-        let o = crate::export::Orient::of(&l, false, false, 0.0);
+        let o = crate::export::Orient::of(&l, false, false, false, 0.0);
         let mut layers = vec![];
         for (n, (m, a)) in maps.iter().enumerate() {
             let fixed = a.then(proj.sample().selections[n].fix.as_ref().unwrap());

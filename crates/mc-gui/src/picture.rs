@@ -38,6 +38,8 @@ pub struct View {
     pub rect: egui::Rect,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// stage x drawn up/down and y left/right (before mirroring and turning)
+    pub swap: bool,
     pub turn: f64,
 }
 
@@ -47,6 +49,7 @@ impl View {
     }
     /// A stage direction (um) as a screen direction (pixels).
     pub fn dir_to_screen(&self, d: P2) -> P2 {
+        let d = if self.swap { [d[1], d[0]] } else { d };
         let (sx, sy) = self.signs();
         let (x, y) = (sx * d[0] * self.scale, sy * d[1] * self.scale);
         let (c, s) = (self.turn.cos(), self.turn.sin());
@@ -57,7 +60,8 @@ impl View {
         let (sx, sy) = self.signs();
         let (c, s) = (self.turn.cos(), self.turn.sin());
         let (x, y) = (c * d[0] + s * d[1], -s * d[0] + c * d[1]);
-        [sx * x / self.scale, sy * y / self.scale]
+        let r = [sx * x / self.scale, sy * y / self.scale];
+        if self.swap { [r[1], r[0]] } else { r }
     }
     pub fn to_screen(&self, p: P2) -> Pos2 {
         let d = self.dir_to_screen([p[0] - self.center[0], p[1] - self.center[1]]);
