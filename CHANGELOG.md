@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.9
+- Settings, *Arrow keys*: swap up/down and left/right, reverse left/right, reverse up/down (both: 180 degrees) — only which way the arrows move the stage; the map stays as it is.
+
 ## 0.5.8
 - Export takes the ticked selections (with a stitched map) only; the tick shows a selection on the map and sends it to export.
 - *Move map* on a selection: the arrows move its map by hand (1 map pixel, Shift 10), not the stage; Enter or Esc: done. To bring neighbouring selections together before Align.

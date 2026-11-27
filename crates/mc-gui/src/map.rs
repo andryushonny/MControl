@@ -224,6 +224,10 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     }
     let mut d = [0.0, 0.0];
     for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
+        // the arrows as set in Settings: exchanged, reversed
+        let (dx, dy) = if app.arrow_swap { (dy, dx) } else { (dx, dy) };
+        let dx = if app.arrow_rev_x { -dx } else { dx };
+        let dy = if app.arrow_rev_y { -dy } else { dy };
         if ui.input(|i| i.key_pressed(k)) {
             let s = view.dir_to_stage([dx, dy]);
             let n = geom::len(s);

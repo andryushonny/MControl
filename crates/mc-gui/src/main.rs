@@ -76,6 +76,10 @@ pub struct App {
     pub flip_x: bool,
     pub flip_y: bool,
     pub swap: bool,
+    /// the arrow keys: up/down and left/right exchanged, then reversed (both: turned 180 degrees)
+    pub arrow_swap: bool,
+    pub arrow_rev_x: bool,
+    pub arrow_rev_y: bool,
     pub tool: Tool,
     pub anchor: Option<P2>,
     pub focus: Option<u32>,
@@ -151,6 +155,9 @@ impl App {
             flip_x: stored("flip_x").as_deref() == Some("true"),
             flip_y: stored("flip_y").as_deref() == Some("true"),
             swap: stored("swap").as_deref() == Some("true"),
+            arrow_swap: stored("arrow_swap").as_deref() == Some("true"),
+            arrow_rev_x: stored("arrow_rev_x").as_deref() == Some("true"),
+            arrow_rev_y: stored("arrow_rev_y").as_deref() == Some("true"),
             tool: Tool::Explore,
             anchor: None,
             focus: None,
@@ -742,6 +749,9 @@ impl eframe::App for App {
         storage.set_string("flip_x", self.flip_x.to_string());
         storage.set_string("flip_y", self.flip_y.to_string());
         storage.set_string("swap", self.swap.to_string());
+        storage.set_string("arrow_swap", self.arrow_swap.to_string());
+        storage.set_string("arrow_rev_x", self.arrow_rev_x.to_string());
+        storage.set_string("arrow_rev_y", self.arrow_rev_y.to_string());
         storage.set_string("arrow_frac", self.arrow_frac.to_string());
     }
 }

@@ -611,6 +611,15 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.label("Arrow step, part of the field");
             ui.add(egui::Slider::new(&mut app.arrow_frac, 0.1..=1.0));
             ui.end_row();
+            ui.label("Arrow keys (stage)");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.arrow_swap, "swap up/down and left/right");
+                ui.checkbox(&mut app.arrow_rev_x, "reverse left/right");
+                ui.checkbox(&mut app.arrow_rev_y, "reverse up/down");
+            })
+            .response
+            .on_hover_text("only which way the arrows move the stage; the map stays as it is (both reverses: turned 180 degrees)");
+            ui.end_row();
             ui.label("Stage on the screen: mirror");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut app.flip_x, "x");
