@@ -49,6 +49,9 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             if ui.button("Fit (Home)").on_hover_text("the whole sample").clicked() {
                 app.fit = true;
             }
+            if ui.button("Clear preview").on_hover_text("forget the small pictures of where the camera has been (stitched maps stay)").clicked() {
+                app.thumbs.clear();
+            }
             ui.separator();
             ui.label("On the microscope");
             let names: Vec<String> = app.proj.objectives.iter().map(|o| o.objective.clone()).collect();

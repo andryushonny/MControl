@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.6
+- Dark frames on the preview map no longer get holes: a pure black pixel was taken for "no picture" (and showed the frames below through it); dark pixels are now dark.
+- *Clear preview* button: forgets the small pictures of where the camera has been (stitched maps stay).
+
 ## 0.5.5
 - Z by hand: PageUp / PageDown (step in Settings, 5 um by default; Shift 1 um, Ctrl 20 um); x, y, z of the stage in the status bar.
 - *Focus* button: finds focus where the stage stands, as a scan does, and stays at the sharpest z (kept in surface.csv).

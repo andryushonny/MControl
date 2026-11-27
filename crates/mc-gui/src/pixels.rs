@@ -287,9 +287,10 @@ impl Sensor {
                     }
                 }
                 let i = (oy * ow + ox) * 3;
-                o.px[i] = (r / n).min(255) as u8;
-                o.px[i + 1] = (g / n).min(255) as u8;
-                o.px[i + 2] = (b / n).min(255) as u8;
+                // never pure black: that means "no picture"; a dark pixel is 1 at least
+                o.px[i] = (r / n).clamp(1, 255) as u8;
+                o.px[i + 1] = (g / n).clamp(1, 255) as u8;
+                o.px[i + 2] = (b / n).clamp(1, 255) as u8;
             }
         }
         o
@@ -345,7 +346,9 @@ pub fn read_png(path: &std::path::Path) -> Result<Rgb, String> {
             _ => (p[0], p[1], p[2], p[3]),
         };
         if a > 0 {
-            o.px[i * 3..i * 3 + 3].copy_from_slice(&[r, g, b]);
+            // a black pixel that is there is dark, not missing ("no picture" is pure black here)
+            let px = if (r, g, b) == (0, 0, 0) { [1, 1, 1] } else { [r, g, b] };
+            o.px[i * 3..i * 3 + 3].copy_from_slice(&px);
         }
     }
     Ok(o)
@@ -385,6 +388,6 @@ mod tests {
         assert_eq!(s.v.iter().map(|&v| v as u8).collect::<Vec<_>>(), raw);
         let c = s.rgb(1);
         assert_eq!((c.w, c.h), (4, 3));
-        assert_eq!(c.get(0, 0)[0], raw[0]); // R of the first cell
+        assert_eq!(c.get(0, 0)[0], raw[0].max(1)); // R of the first cell (a dark pixel is 1 at least)
     }
 }
