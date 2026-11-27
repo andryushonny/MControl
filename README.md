@@ -55,6 +55,8 @@ The full walk-through is in [`example.ipynb`](example.ipynb): stage, light, came
 
 ![mc-operator](docs/img/operator.png)
 
+**Controls** (top bar): turn and mirror the picture on the screen to your liking; teach the arrows by watching the stage (it moves a little along X, then Y, and you click where you saw it go), so each arrow moves the stage the way it points for you; find the camera's orientation.
+
 How a session goes:
 1. **Look around.** Arrows move the picture that way on the screen (Shift: a tenth, Ctrl: a whole field), a double click moves the stage there, the wheel zooms. Wherever the camera stood still a small copy stays on the map (the preview map).
 2. **Select** (S): two clicks are the corners of a rectangle, snapped to the motor step. While drawing it shows how many frames it takes with the objective on the microscope; a selection over the limit is refused. Each selection has its objective, its centre, a colour; the list is the drawing order (top on top).

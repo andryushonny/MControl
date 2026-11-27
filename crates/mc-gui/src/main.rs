@@ -80,6 +80,16 @@ pub struct App {
     pub arrow_swap: bool,
     pub arrow_rev_x: bool,
     pub arrow_rev_y: bool,
+    /// taught arrows: the stage direction (unit, um) of the right arrow and of the up arrow (left, down: the
+    /// opposite), as the operator sees the stage; None: the arrows follow the screen
+    pub arrow_dirs: Option<[[f64; 2]; 2]>,
+    /// the picture turned on the screen by this many quarter turns (the operator's taste)
+    pub view_rot: i32,
+    pub controls_open: bool,
+    /// the arrow teaching: which axis was just moved (and back), waiting for where it went
+    pub teach: Option<usize>,
+    /// what has been taught so far: the screen-like direction (as seen) of +x and of +y
+    pub taught: [Option<[f64; 2]>; 2],
     pub tool: Tool,
     pub anchor: Option<P2>,
     pub focus: Option<u32>,
@@ -158,6 +168,11 @@ impl App {
             arrow_swap: stored("arrow_swap").as_deref() == Some("true"),
             arrow_rev_x: stored("arrow_rev_x").as_deref() == Some("true"),
             arrow_rev_y: stored("arrow_rev_y").as_deref() == Some("true"),
+            arrow_dirs: stored("arrow_dirs").and_then(|s| serde_json::from_str(&s).ok()),
+            view_rot: stored("view_rot").and_then(|s| s.parse().ok()).unwrap_or(0),
+            controls_open: false,
+            teach: None,
+            taught: [None, None],
             tool: Tool::Explore,
             anchor: None,
             focus: None,
@@ -229,13 +244,48 @@ impl App {
         }
     }
 
+    /// The whole turn of the view, radians: the operator's quarter turns and the sample's own (Level grid).
+    pub fn view_turn(&self) -> f64 {
+        (self.view_rot as f64 * 90.0 + self.proj.sample().turn_deg).to_radians()
+    }
+
+    /// Teaching the arrows: move the stage a little along x (axis 0) or y (1) and back, then ask where it went.
+    pub fn teach_move(&mut self, axis: usize) {
+        let f = self.proj.optics().field_um();
+        let d = 0.4 * f[0].min(f[1]);
+        let (dx, dy) = if axis == 0 { (d, 0.0) } else { (0.0, d) };
+        self.link.send(serde_json::json!({"cmd": "move", "dx": dx, "dy": dy}));
+        self.link.send(serde_json::json!({"cmd": "sleep", "ms": 700}));
+        self.link.send(serde_json::json!({"cmd": "move", "dx": -dx, "dy": -dy}));
+        self.teach = Some(axis);
+    }
+
+    /// The operator says where the stage went (as seen: [1,0] right, [0,-1] up ...). With both axes known,
+    /// the arrows are set: each moves the stage the way it points, for this operator.
+    pub fn teach_answer(&mut self, seen: [f64; 2]) {
+        let Some(axis) = self.teach.take() else { return };
+        self.taught[axis] = Some(seen);
+        if let [Some(ex), Some(ey)] = self.taught {
+            if (ex[0] * ey[0] + ex[1] * ey[1]).abs() > 0.5 {
+                self.message = "x and y were seen going the same way: teach again".into();
+                self.taught = [None, None];
+                return;
+            }
+            // seen = ex * sx + ey * sy  ->  stage (sx, sy) for "right" (1,0) and for "up" (0,-1)
+            let stage_for = |want: [f64; 2]| [want[0] * ex[0] + want[1] * ex[1], want[0] * ey[0] + want[1] * ey[1]];
+            self.arrow_dirs = Some([stage_for([1.0, 0.0]), stage_for([0.0, -1.0])]);
+            self.taught = [None, None];
+            self.message = "arrows taught: each moves the stage the way it points, as you see it".into();
+        }
+    }
+
     /// The view's turn that stands the lattice level: the smallest turn that makes its first axis horizontal.
     pub fn level_grid(&mut self) {
         let Some(l) = self.proj.sample().lattice.clone() else {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
             return;
         };
-        let v = picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: self.flip_x, flip_y: self.flip_y, swap: self.swap, turn: 0.0 };
+        let v = picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: self.flip_x, flip_y: self.flip_y, swap: self.swap, turn: (self.view_rot as f64 * 90.0).to_radians() };
         let d = v.dir_to_screen(l.a);
         let mut t = -d[1].atan2(d[0]).to_degrees();
         while t > 45.0 {
@@ -627,7 +677,7 @@ impl App {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
             return;
         };
-        let orient = export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, sample.turn_deg.to_radians());
+        let orient = export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, self.view_turn());
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];
@@ -731,6 +781,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::from_gray(24))).show(ui, |ui| map::show(self, ui));
         panels::settings(self, ui.ctx());
         panels::queue(self, ui.ctx());
+        panels::controls(self, ui.ctx());
         panels::objective_hint(self, ui.ctx());
         if self.dirty {
             self.dirty = false;
@@ -752,6 +803,8 @@ impl eframe::App for App {
         storage.set_string("arrow_swap", self.arrow_swap.to_string());
         storage.set_string("arrow_rev_x", self.arrow_rev_x.to_string());
         storage.set_string("arrow_rev_y", self.arrow_rev_y.to_string());
+        storage.set_string("arrow_dirs", serde_json::to_string(&self.arrow_dirs).unwrap_or_default());
+        storage.set_string("view_rot", self.view_rot.to_string());
         storage.set_string("arrow_frac", self.arrow_frac.to_string());
     }
 }

@@ -43,6 +43,9 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: . and , keys (Shift: x5)").clicked() {
                 app.focus_here();
             }
+            if ui.button("Controls").on_hover_text("how the picture stands on the screen and which way the arrows move the stage, to your liking").clicked() {
+                app.controls_open = !app.controls_open;
+            }
             ui.menu_button("Calibrate", |ui| {
                 let can = app.calib.is_none() && app.link.stage_pos().is_some();
                 ui.label(RichText::new(format!("for {}, on a spot with texture (no repeating pattern)", app.proj.optics().objective)).weak().size(11.5));
@@ -522,7 +525,7 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                     let [a, b, c, d] = app.proj.optics().m;
                     let det = a * d - b * c;
                     let ux = [d / det, -c / det];
-                    let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: app.flip_x, flip_y: app.flip_y, swap: app.swap, turn: 0.0 };
+                    let v = crate::picture::View { center: [0.0, 0.0], scale: 1.0, rect: egui::Rect::ZERO, flip_x: app.flip_x, flip_y: app.flip_y, swap: app.swap, turn: (app.view_rot as f64 * 90.0).to_radians() };
                     let sd = v.dir_to_screen(ux);
                     app.proj.sample_mut().turn_deg = -sd[1].atan2(sd[0]).to_degrees();
                     app.fit = true;
@@ -610,15 +613,6 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
             ui.end_row();
             ui.label("Arrow step, part of the field");
             ui.add(egui::Slider::new(&mut app.arrow_frac, 0.1..=1.0));
-            ui.end_row();
-            ui.label("Arrow keys (stage)");
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut app.arrow_swap, "swap up/down and left/right");
-                ui.checkbox(&mut app.arrow_rev_x, "reverse left/right");
-                ui.checkbox(&mut app.arrow_rev_y, "reverse up/down");
-            })
-            .response
-            .on_hover_text("only which way the arrows move the stage; the map stays as it is (both reverses: turned 180 degrees)");
             ui.end_row();
             ui.label("Stage on the screen: mirror");
             ui.horizontal(|ui| {
@@ -887,4 +881,107 @@ pub fn objective_hint(app: &mut App, ctx: &egui::Context) {
             });
         });
     });
+}
+
+/// One place to make the controls comfortable for this operator at this microscope: how the picture stands on
+/// the screen, which way each arrow moves the stage (taught by watching the stage), the camera's orientation.
+pub fn controls(app: &mut App, ctx: &egui::Context) {
+    let mut open = app.controls_open;
+    egui::Window::new("Controls").open(&mut open).default_width(470.0).show(ctx, |ui| {
+        ui.heading("1. The picture on the screen");
+        ui.label(RichText::new("Only how the map is shown: turn and mirror it until it looks the way you like.").weak().size(11.5));
+        ui.horizontal(|ui| {
+            if ui.button("Rotate left").clicked() {
+                app.view_rot = (app.view_rot + 3) % 4;
+                app.fit = true;
+            }
+            if ui.button("Rotate right").clicked() {
+                app.view_rot = (app.view_rot + 1) % 4;
+                app.fit = true;
+            }
+            ui.checkbox(&mut app.flip_x, "mirror left-right");
+            ui.checkbox(&mut app.flip_y, "mirror up-down");
+        });
+        ui.label(RichText::new(format!("turned {} deg", app.view_rot * 90)).monospace().size(11.0));
+        ui.separator();
+
+        ui.heading("2. The arrows");
+        ui.label(RichText::new("Teach them by watching the stage itself: it moves a little and comes back; click where you saw it go. Then each arrow moves the stage the way it points, for you.").weak().size(11.5));
+        let connected = app.link.stage_pos().is_some();
+        for (axis, name) in [(0usize, "X"), (1, "Y")] {
+            ui.horizontal(|ui| {
+                let done = app.taught[axis].is_some();
+                if ui.add_enabled(connected && app.teach.is_none(), egui::Button::new(format!("Move along {name}"))).clicked() {
+                    app.teach_move(axis);
+                }
+                if app.teach == Some(axis) {
+                    ui.label("it went:");
+                    for (label, dir) in [("left", [-1.0, 0.0]), ("up (away)", [0.0, -1.0]), ("right", [1.0, 0.0]), ("down (to me)", [0.0, 1.0])] {
+                        if ui.button(label).clicked() {
+                            app.teach_answer(dir);
+                        }
+                    }
+                } else if done {
+                    ui.label(RichText::new("seen").color(Color32::from_rgb(120, 200, 140)));
+                }
+            });
+        }
+        // by hand: each arrow to an axis
+        let axes = [("+X", [1.0, 0.0]), ("-X", [-1.0, 0.0]), ("+Y", [0.0, 1.0]), ("-Y", [0.0, -1.0])];
+        let name_of = |v: [f64; 2]| axes.iter().find(|a| (a.1[0] - v[0]).abs() < 0.5 && (a.1[1] - v[1]).abs() < 0.5).map(|a| a.0).unwrap_or("?");
+        ui.horizontal(|ui| {
+            ui.label("By hand:");
+            let mut dirs = app.arrow_dirs.unwrap_or([[1.0, 0.0], [0.0, -1.0]]);
+            let mut set = false;
+            for (k, arrow) in [(0usize, "right arrow"), (1, "up arrow")] {
+                egui::ComboBox::from_id_salt(("arrow", k)).selected_text(format!("{arrow}: {}", name_of(dirs[k]))).show_ui(ui, |ui| {
+                    for (n, v) in axes {
+                        if ui.selectable_label(name_of(dirs[k]) == n, n).clicked() {
+                            dirs[k] = v;
+                            set = true;
+                        }
+                    }
+                });
+            }
+            if set {
+                app.arrow_dirs = Some(dirs);
+            }
+        });
+        ui.horizontal(|ui| {
+            match app.arrow_dirs {
+                Some([r, u]) => ui.label(RichText::new(format!("right arrow: {}, up arrow: {} (left and down: the opposite)", name_of(r), name_of(u))).size(11.5)),
+                None => ui.label(RichText::new("the arrows follow the screen").size(11.5)),
+            };
+            if app.arrow_dirs.is_some() && ui.small_button("Follow the screen again").clicked() {
+                app.arrow_dirs = None;
+            }
+        });
+        ui.separator();
+
+        ui.heading("3. The camera");
+        ui.label(RichText::new("How the camera's picture is turned or mirrored against the stage. Right when the sample in the live picture stands still on the map while the stage moves.").weak().size(11.5));
+        ui.horizontal(|ui| {
+            let can = app.calib.is_none() && app.link.stage_pos().is_some();
+            if ui.add_enabled(can, egui::Button::new("Find it (3 frames)")).on_hover_text("on a spot with texture, no repeating pattern").clicked() {
+                app.start_calibration(true);
+            }
+            let apply = |app: &mut App, p: [f64; 4]| {
+                let [a, b, c, d] = app.proj.optics().m;
+                app.proj.optics_mut().m = [a * p[0] + b * p[2], a * p[1] + b * p[3], c * p[0] + d * p[2], c * p[1] + d * p[3]];
+                app.proj.optics_mut().profile_path = None;
+                app.thumbs.clear();
+                app.changed();
+            };
+            if ui.button("Turn 90").clicked() {
+                apply(app, [0.0, -1.0, 1.0, 0.0]);
+            }
+            if ui.button("Mirror x").clicked() {
+                apply(app, [-1.0, 0.0, 0.0, 1.0]);
+            }
+            if ui.button("Mirror y").clicked() {
+                apply(app, [1.0, 0.0, 0.0, -1.0]);
+            }
+        });
+    });
+    app.controls_open = open;
 }

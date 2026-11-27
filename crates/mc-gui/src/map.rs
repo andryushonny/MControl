@@ -18,7 +18,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(Key::Home)) {
         app.fit = true;
     }
-    let turn = app.proj.sample().turn_deg.to_radians();
+    let turn = app.view_turn();
     if app.fit {
         app.fit = false;
         if let Some(e) = app.proj.sample().extent() {
@@ -225,6 +225,15 @@ fn keys(app: &mut App, ui: &egui::Ui, stage: Option<[f64; 3]>, view: &View) {
     let mut d = [0.0, 0.0];
     for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)] {
         // the arrows as set in Settings: exchanged, reversed
+        if let Some([r, u]) = app.arrow_dirs {
+            // taught arrows: right / up as the operator sees the stage, whatever the screen shows
+            if ui.input(|i| i.key_pressed(k)) {
+                let s = [dx * r[0] - dy * u[0], dx * r[1] - dy * u[1]];
+                let step = f[0].min(f[1]) * frac;
+                d = geom::add(d, geom::mul(s, step / geom::len(s).max(1e-9)));
+            }
+            continue;
+        }
         let (dx, dy) = if app.arrow_swap { (dy, dx) } else { (dx, dy) };
         let dx = if app.arrow_rev_x { -dx } else { dx };
         let dy = if app.arrow_rev_y { -dy } else { dy };

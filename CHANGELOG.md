@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+- *Controls* window, to make the program comfortable for whoever sits at the microscope, however it stands:
+  1. the picture on the screen: rotate left / right by 90 degrees, mirror left-right / up-down (the view only);
+  2. the arrows, taught by watching the stage: it moves a little along X and comes back, you click where you saw it go, the same for Y; then each arrow moves the stage the way it points for you, whatever the screen shows; or each arrow set to +-X / +-Y by hand;
+  3. the camera: its orientation found from 3 frames, or turned / mirrored by hand.
+- The arrow checkboxes of 0.5.9 are replaced by this.
+
 ## 0.5.9
 - Settings, *Arrow keys*: swap up/down and left/right, reverse left/right, reverse up/down (both: 180 degrees) — only which way the arrows move the stage; the map stays as it is.
 
