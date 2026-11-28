@@ -724,7 +724,40 @@ impl App {
             wb: self.proj.wb,
             focus: focus::Settings { on: self.proj.scan.autofocus, drop: self.proj.scan.focus_drop, max_um: self.proj.scan.focus_max_um, settle_ms: 0.0, window_um: self.proj.scan.focus_window_um },
             surface: Some(self.proj.path("surface.csv")),
+            anchors: self.anchors_for(sel),
         }
+    }
+
+    /// The lattice's crosses around a selection (half a field more on each side), at their true places.
+    pub fn anchors_for(&self, sel: &project::Selection) -> Vec<P2> {
+        let Some(l) = self.proj.sample().true_lattice() else { return vec![] };
+        let f = self.proj.optics_of(sel).field_um();
+        let r = &sel.rect;
+        let big = geom::Rect { x0: r.x0 - f[0] / 2.0, y0: r.y0 - f[1] / 2.0, x1: r.x1 + f[0] / 2.0, y1: r.y1 + f[1] / 2.0 };
+        let c = big.corners().map(|q| l.coords(q));
+        let (i0, i1) = (c.iter().map(|q| q[0]).fold(f64::MAX, f64::min).floor() as i32, c.iter().map(|q| q[0]).fold(f64::MIN, f64::max).ceil() as i32);
+        let (j0, j1) = (c.iter().map(|q| q[1]).fold(f64::MAX, f64::min).floor() as i32, c.iter().map(|q| q[1]).fold(f64::MIN, f64::max).ceil() as i32);
+        let mut v = vec![];
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let p = l.at(i as f64, j as f64);
+                if big.contains(p) {
+                    v.push(p);
+                }
+            }
+        }
+        v
+    }
+
+    /// The objective's um/px corrected by the camera's scale against the drawing that a pinned stitch measured.
+    pub fn correct_scale(&mut self, objective: &str, ppm: f64) {
+        let Some(o) = self.proj.objectives.iter_mut().find(|o| o.objective == objective) else { return };
+        let k = 1.0 + ppm * 1e-6;
+        o.m = o.m.map(|v| v * k);
+        o.profile_path = None;
+        self.message = format!("{objective}: scale corrected by {ppm:+.0} ppm, now {:.5} um/px (scan again or Stitch again)", o.um_per_px());
+        self.thumbs.clear();
+        self.changed();
     }
 
     /// The last scan's frames of this selection stitched again into a new map (nothing scanned).

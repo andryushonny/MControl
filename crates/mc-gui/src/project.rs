@@ -97,6 +97,18 @@ pub struct Sample {
 }
 
 impl Sample {
+    /// Where the crosses truly are, for pinning: the lattice, at the drawing's pitch when the sample has one.
+    pub fn true_lattice(&self) -> Option<Lattice> {
+        let l = self.lattice.clone()?;
+        Some(match &self.design {
+            Some(d) => {
+                let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|k| (c.at, k))).collect();
+                l.with_pitch(&marks, d.pitch)
+            }
+            None => l,
+        })
+    }
+
     pub fn new(name: &str) -> Sample {
         Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, lattice_sel: None, design: None, turn_deg: 0.0 }
     }

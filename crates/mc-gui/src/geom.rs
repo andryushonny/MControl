@@ -369,6 +369,19 @@ impl Lattice {
 }
 
 impl Lattice {
+    /// The same lattice with the drawing's pitch (its turn, mirror and the marks' centre kept): where the
+    /// crosses truly are, at the drawing's scale, whatever scale the stage has.
+    pub fn with_pitch(&self, marks: &[(P2, [i32; 2])], pitch: P2) -> Lattice {
+        let a = mul(self.a, pitch[0] / len(self.a));
+        let b = mul(self.b, pitch[1] / len(self.b));
+        let n = marks.len().max(1) as f64;
+        let c = marks.iter().fold([0.0, 0.0], |s, (p, _)| add(s, *p));
+        let c = [c[0] / n, c[1] / n];
+        let (ic, jc) = marks.iter().fold((0.0, 0.0), |s, (_, k)| (s.0 + k[0] as f64, s.1 + k[1] as f64));
+        let (ic, jc) = (ic / n, jc / n);
+        Lattice { origin: sub(c, add(mul(a, ic), mul(b, jc))), a, b, rms_um: self.rms_um }
+    }
+
     /// A square lattice (equal pitch along a and b, b at a right angle to a) through the crosses: for a
     /// drawing's crosses, which are square. 2 crosses: as `fit`; 3 or more: least squares, b turned either way
     /// from a (the stage may be mirrored against the drawing), the better one.

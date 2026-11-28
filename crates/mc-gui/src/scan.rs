@@ -95,6 +95,8 @@ pub struct Settings {
     pub focus: crate::focus::Settings,
     /// the project's record of the surface (x, y, z, sharpness of every frame), appended to
     pub surface: Option<PathBuf>,
+    /// the lithography crosses' true places (stage um) around the selection: pinned in the stitch
+    pub anchors: Vec<P2>,
 }
 
 /// Scan `rect` into `frames_dir`, then stitch into `map_dir`. Runs on its own thread.
@@ -272,6 +274,17 @@ fn stitch(s: &Settings, mode: Mode, frames: &Path, map: &Path, job: &Mutex<Job>)
     } else {
         PathBuf::from(s.optics.profile_path.as_ref().unwrap())
     };
+    // control points for MStitch: the crosses' true places
+    let anchors = frames.join("anchors.csv");
+    if s.anchors.is_empty() {
+        let _ = std::fs::remove_file(&anchors);
+    } else {
+        let mut t = String::from("x_um,y_um\n");
+        for p in &s.anchors {
+            t += &format!("{:.4},{:.4}\n", p[0], p[1]);
+        }
+        std::fs::write(&anchors, t).map_err(|e| e.to_string())?;
+    }
     let mut parts = s.mstitch.split_whitespace();
     let exe = parts.next().ok_or("MStitch command is empty (Settings)")?;
     let mut cmd = std::process::Command::new(exe);
@@ -419,7 +432,7 @@ mod e2e {
         let id = proj.add_selection(rect);
         let mut result: Option<(Rgb, Affine, f64, Vec<Cross>)> = None;
         for mode in [Mode::Quick, Mode::Quality] {
-            let s = Settings { optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None };
+            let s = Settings { optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![] };
             let base = out.join("scans").join(mode.name());
             let t1 = Instant::now();
             let job = start(link.clone(), id, mode, rect, s, base.join("frames"), base.join("map"));
@@ -583,7 +596,7 @@ mod e2e_lens {
             let id = proj.add_selection(*r);
             let mut ok = None;
             for attempt in 0..4 {
-                let s = Settings { optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None };
+                let s = Settings { optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![] };
                 let base = out.join(format!("scans/s{n}_{attempt}"));
                 let job = start(link.clone(), id, Mode::Quick, *r, s, base.join("frames"), base.join("map"));
                 match wait_scan(&job) {
@@ -674,7 +687,7 @@ mod e2e_focus {
         std::thread::sleep(std::time::Duration::from_millis(300));
         let optics = Optics::guess("sim", 0.22, [1296, 972]);
         let rect = Rect::from_corners([0.0, 0.0], [600.0, 400.0], 5.556);
-        let s = Settings { optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: Some(out.join("surface.csv")) };
+        let s = Settings { optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: Some(out.join("surface.csv")), anchors: vec![] };
         let job = start(link.clone(), 1, Mode::Quick, rect, s, out.join("scan/frames"), out.join("scan/map"));
         loop {
             let j = job.lock().unwrap();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.17
+- Crosses pinned in the stitch (MStitch 0.6.0): every scan and *Stitch again* gives MStitch the lattice's crosses around the selection (anchors.csv), at their true places: with the sample's drawing, at the drawing's pitch (the marks' turn and centre kept). Each found in the frames is pinned in the global solve, so drift cannot pile up along the map.
+- Summary: crosses pinned, what is left after pinning (px), the drift they took out, and the camera's scale against the drawing (ppm, from crosses two by two in a frame). *Correct um/px of <objective>* applies it to the objective; then scan or Stitch again.
+
 ## 0.6.16
 - The lens, more of it: radial k3 (r^6) and decentering p1, p2 (Brown-Conrady) besides k1, k2. *Calibrate, Distortion* fits k1, k2 first, then all five, and keeps the five only if they lower what is left by more than 10 % (else they would fit the noise). Settings shows and edits them. On a synthetic lens with all five: what is left < 0.05 px, p1, p2 found to 3e-4.
 - *Calibrate, Scale vs focus*: the scale measured from whole frames at z - dz, z, z + dz (dz in Settings, default 5 um): ppm per um of focus. Each scanned frame is then brought to the scale at the scan's start (resampled with the distortion, one pass), so frames taken at another focus do not stretch the map.

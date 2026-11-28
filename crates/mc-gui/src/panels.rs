@@ -1439,6 +1439,11 @@ pub fn summary_window(app: &mut App, ctx: &egui::Context) {
                 }
             });
         });
+        if let Some(ppm) = summary::get(&v, "mstitch.frame_scale_ppm") {
+            if ppm.abs() > 20.0 && ui.button(format!("Correct um/px of {objective} by {ppm:+.0} ppm")).on_hover_text("the camera's scale measured against the drawing by the pinned crosses: the objective's um/px set from it (then scan or Stitch again)").clicked() {
+                app.correct_scale(&objective, ppm);
+            }
+        }
         ui.label(RichText::new("Green: within the target. Yellow: within it, but out of this setup's usual range (mean +- 3 sigma of earlier stitches with the same objective and mode). Red: out of the target. Crosses: needs the lattice (2 signed crosses) and the map loaded; measured where the map is drawn now.").weak().size(11.0));
     });
     app.summary_open = open;
