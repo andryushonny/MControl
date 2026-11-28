@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.18
+- Seams hardly seen (MStitch 0.6.1, nothing to set): frames evened out against each other before blending (brightness and tilted light, per colour), then blended over 40 px in the background. Summary: the largest correction (%).
+
 ## 0.6.17
 - Crosses pinned in the stitch (MStitch 0.6.0): every scan and *Stitch again* gives MStitch the lattice's crosses around the selection (anchors.csv), at their true places: with the sample's drawing, at the drawing's pitch (the marks' turn and centre kept). Each found in the frames is pinned in the global solve, so drift cannot pile up along the map.
 - Summary: crosses pinned, what is left after pinning (px), the drift they took out, and the camera's scale against the drawing (ppm, from crosses two by two in a frame). *Correct um/px of <objective>* applies it to the objective; then scan or Stitch again.

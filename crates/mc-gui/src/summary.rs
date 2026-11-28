@@ -42,6 +42,7 @@ pub const METRICS: &[Metric] = &[
     Metric { key: "mstitch.objects_cut", name: "Objects cut by seams", unit: "", target: Some(0.0), smaller: true, abs: false, help: "objects larger than any one frame holds (the others are whole from one frame)" },
     Metric { key: "mstitch.objects", name: "Objects on the map", unit: "", target: None, smaller: true, abs: false, help: "crystals, crosses, dust found and kept whole" },
     Metric { key: "mstitch.seam_step_pct", name: "Brightness step over overlaps", unit: "%", target: Some(1.0), smaller: true, abs: false, help: "two frames' brightness over their common part: flat field, exposure" },
+    Metric { key: "mstitch.gain_max_pct", name: "Largest brightness correction", unit: "%", target: Some(10.0), smaller: true, abs: false, help: "frames evened out against each other before blending: the largest correction (more: exposure or light changed during the scan)" },
     Metric { key: "mstitch.background_sigma_pct", name: "Background unevenness", unit: "%", target: Some(1.0), smaller: true, abs: false, help: "each frame's background after the flat field: vignetting left" },
     Metric { key: "mstitch.stage_dev_rms_um", name: "Stage landing, rms", unit: "um", target: None, smaller: true, abs: false, help: "how far frames landed from where the stage said, the common offset taken out" },
     Metric { key: "focus.blurred_pct", name: "Blurred frames", unit: "%", target: Some(2.0), smaller: true, abs: false, help: "frames less sharp than half the scan's median" },
