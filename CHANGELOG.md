@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.20
+- Fix: the exported DXF was the empty template (layers, images, lines all missing) in the Windows builds. Git on Windows checks the template out with CR LF line ends, so its markers were never found. Now found either way and the drawing is written with plain LF; .gitattributes keeps the template as it is.
+
 ## 0.6.19
 - Lattice panel, *Fit to all crosses*: every cross of the lattice looked for on the base map (where the lattice puts it, numbered by it) and the lattice fitted through all of them with the signed ones, least squares (specks taken for crosses dropped). Two signed crosses fix the lattice only near them: far away a small error in either grows (0.2 um over one pitch is 2 um ten pitches on). The message says how far the crosses were off the 2-cross lattice and what is left; much left means the map itself is not true (then Stitch again with the crosses pinned, Summary, Correct um/px). Kept while the signed crosses stay as they were; *Signed crosses only* to drop it.
 

@@ -170,7 +170,12 @@ impl Dxf {
         self.images.push((name, def));
     }
 
-    pub fn text_out(mut self) -> String {
+    pub fn text_out(self) -> String {
+        let t = TEMPLATE;
+        self.text_out_with(t)
+    }
+
+    pub fn text_out_with(mut self, template: &str) -> String {
         let mut classes = String::new();
         let mut root = String::new();
         let mut objects = String::new();
@@ -216,8 +221,10 @@ impl Dxf {
         }
         objects.push_str(&std::mem::take(&mut self.objects));
         let seed = format!("{:X}", self.next);
-        let mut out = String::with_capacity(TEMPLATE.len() + self.entities.len() + objects.len() + 4096);
-        for line in TEMPLATE.split('\n') {
+        let mut out = String::with_capacity(template.len() + self.entities.len() + objects.len() + 4096);
+        // the template may come with Windows line ends (git on Windows checks text out with CR LF): a marker
+        // must still be found, and the drawing written with plain LF throughout
+        for line in template.split('\n').map(|l| l.trim_end_matches('\r')) {
             let part: &str = match line {
                 "@HANDSEED@" => &seed,
                 "@CLASSES@" => &classes,
@@ -256,12 +263,27 @@ mod tests {
     fn template_handles_are_the_ones_used() {
         let t = super::TEMPLATE;
         for m in ["@HANDSEED@", "@CLASSES@", "@LAYERS@", "@ENTITIES@", "@ROOT@", "@OBJECTS@"] {
-            assert_eq!(t.split('\n').filter(|l| *l == m).count(), 1, "{m}");
+            assert_eq!(t.split('\n').filter(|l| l.trim_end_matches('\r') == m).count(), 1, "{m}");
         }
         assert!(t.contains("DICTIONARY\n  5\nA\n330\n0\n"));
         assert!(t.contains("BLOCK_RECORD\n  5\n17\n"));
         // the template's own seed, before the marker replaced it: nothing in the template uses FIRST_FREE or above
         let max = t.split("\n  5\n").skip(1).filter_map(|s| u64::from_str_radix(s.split('\n').next()?, 16).ok()).max().unwrap();
         assert!(max < super::FIRST_FREE, "{max:X}");
+    }
+
+    /// Built on Windows the template comes with CR LF line ends (git checks text out so): the markers must
+    /// still be replaced (else the drawing is the empty template, as exported up to 0.6.19).
+    #[test]
+    fn crlf_template() {
+        let crlf = super::TEMPLATE.replace("\r\n", "\n").replace('\n', "\r\n");
+        let mut d = super::Dxf::new();
+        d.layer("L", 1, None);
+        d.line("L", [0.0, 0.0], [10.0, 0.0]);
+        let out = d.text_out_with(&crlf);
+        for m in ["@HANDSEED@", "@CLASSES@", "@LAYERS@", "@ENTITIES@", "@ROOT@", "@OBJECTS@"] {
+            assert!(!out.contains(m), "{m} left in the drawing");
+        }
+        assert!(out.contains("\nLINE\n") && !out.contains('\r'));
     }
 }
