@@ -11,10 +11,11 @@ use crate::pixels::Rgb;
 /// window stands; the arm along gives a narrow peak whose centroid, partly covered edge pixels included,
 /// is its sub-pixel centre.
 pub fn refine(map: &Rgb, u: f64, v: f64, radius: usize) -> Option<(f64, f64)> {
-    let (mut cu, mut cv) = profiles(map, u, v, radius, 0.1)?;
-    let r2 = (radius * 3 / 10).max(4);
+    let (mut cu, mut cv, wide) = profiles(map, u, v, radius, 0.1)?;
+    // the fine window: small, but several arm widths across, else the arm fills it and stands out of nothing
+    let r2 = (radius * 3 / 10).max(4).max(2 * wide + 4);
     for _ in 0..3 {
-        let (nu, nv) = profiles(map, cu, cv, r2, 0.25)?;
+        let (nu, nv, _) = profiles(map, cu, cv, r2, 0.25)?;
         let moved = (nu - cu).abs().max((nv - cv).abs());
         (cu, cv) = (nu, nv);
         if moved < 0.01 {
@@ -25,13 +26,14 @@ pub fn refine(map: &Rgb, u: f64, v: f64, radius: usize) -> Option<(f64, f64)> {
 }
 
 /// The cross's column and row (edge based, sub-pixel) from the column and row profiles of a window.
-fn profiles(map: &Rgb, u: f64, v: f64, r: usize, frac: f64) -> Option<(f64, f64)> {
+/// Also the arms' width (px, the wider band).
+fn profiles(map: &Rgb, u: f64, v: f64, r: usize, frac: f64) -> Option<(f64, f64, usize)> {
     let (g, n, x0, y0) = window(map, u, v, r)?;
     let rows: Vec<f64> = (0..n).map(|y| (0..n).map(|x| g[y * n + x]).sum::<f64>() / n as f64).collect();
     let cols: Vec<f64> = (0..n).map(|x| (0..n).map(|y| g[y * n + x]).sum::<f64>() / n as f64).collect();
-    let y = peak(&rows, frac)?;
-    let x = peak(&cols, frac)?;
-    Some((x0 as f64 + x + 0.5, y0 as f64 + y + 0.5))
+    let (y, wy) = peak(&rows, frac)?;
+    let (x, wx) = peak(&cols, frac)?;
+    Some((x0 as f64 + x + 0.5, y0 as f64 + y + 0.5, wx.max(wy)))
 }
 
 /// Grey values of a (2r+1)^2 window around (u, v), and its top left pixel; None at the map's edge.
@@ -54,7 +56,7 @@ fn window(map: &Rgb, u: f64, v: f64, r: usize) -> Option<(Vec<f64>, usize, i64, 
 
 /// The position of the one line that stands out from the profile's median, sub-pixel; None if nothing does.
 /// `frac`: the band is what deviates more than this part of the peak.
-fn peak(p: &[f64], frac: f64) -> Option<f64> {
+fn peak(p: &[f64], frac: f64) -> Option<(f64, usize)> {
     let mut s = p.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let med = s[s.len() / 2];
@@ -79,7 +81,15 @@ fn peak(p: &[f64], frac: f64) -> Option<f64> {
         b += 1;
     }
     let (sw, sx) = (a..=b).fold((0.0, 0.0), |(w, x), i| (w + dev[i], x + dev[i] * i as f64));
-    Some(sx / sw)
+    // the arm's own width: where it is at least half the peak (the band above may take in more)
+    let (mut c, mut d) = (k, k);
+    while c > 0 && dev[c - 1] > best * 0.5 {
+        c -= 1;
+    }
+    while d + 1 < p.len() && dev[d + 1] > best * 0.5 {
+        d += 1;
+    }
+    Some((sx / sw, d - c + 1))
 }
 
 #[cfg(test)]

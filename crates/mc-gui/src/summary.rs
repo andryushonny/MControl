@@ -34,7 +34,9 @@ pub const METRICS: &[Metric] = &[
     Metric { key: "mstitch.frame_scale_ppm", name: "Camera scale against the drawing", unit: "ppm", target: Some(100.0), smaller: true, abs: true, help: "two crosses in one frame: their distance in pixels against the drawing's; Correct um/px applies it" },
     Metric { key: "mstitch.anchor_rms_px", name: "Crosses after pinning, rms", unit: "px", target: Some(0.3), smaller: true, abs: false, help: "the crosses pinned in the stitch: how far each is left from its place" },
     Metric { key: "mstitch.anchor_drift_before_px", name: "Crosses' drift before pinning, rms", unit: "px", target: None, smaller: true, abs: false, help: "how far the crosses would have been without pinning (what the pins took out)" },
-    Metric { key: "mstitch.anchors_used", name: "Crosses pinned", unit: "", target: None, smaller: false, abs: false, help: "crosses found in the frames and pinned (of those in anchors.csv)" },
+    Metric { key: "mstitch.anchors_given", name: "Crosses given to pin", unit: "", target: None, smaller: false, abs: false, help: "the lattice's crosses around the selection sent to MStitch (anchors.csv); 0: no lattice when stitched" },
+    Metric { key: "mstitch.anchors_found", name: "Crosses found in frames", unit: "", target: None, smaller: false, abs: false, help: "cross sightings in the frames (one cross is often in two or four frames)" },
+    Metric { key: "mstitch.anchors_used", name: "Crosses pinned", unit: "", target: None, smaller: false, abs: false, help: "sightings pinned, after dropping those far off the others' consensus" },
     Metric { key: "mstitch.pair_rms_px", name: "Pairs after the solve, rms", unit: "px", target: Some(0.2), smaller: true, abs: false, help: "how far overlapping frames stay from their measured offset once all are placed (full-resolution px)" },
     Metric { key: "mstitch.pair_max_px", name: "Pairs after the solve, max", unit: "px", target: Some(0.5), smaller: true, abs: false, help: "the worst pair" },
     Metric { key: "mstitch.ncc_median", name: "Overlap likeness (NCC), median", unit: "", target: Some(0.5), smaller: false, abs: false, help: "how alike overlapping frames are: texture and focus" },
@@ -168,9 +170,7 @@ fn lsq(pts: &[(f64, f64, f64)], k: usize) -> Option<Vec<f64>> {
 
 /// The crosses on a map against the lattice: every node inside the selection looked for on the map (where it is
 /// drawn now), the best similarity taken out; what is left, and the similarity's scale and the affine's skew.
-pub fn crosses(l: &Lattice, rect: &Rect, map: &Rgb, place: &Affine, design_pitch: Option<P2>) -> Option<Value> {
-    let p = l.pitch();
-    let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
+pub fn crosses(l: &Lattice, rect: &Rect, map: &Rgb, place: &Affine, design_pitch: Option<P2>, radius_um: f64) -> Option<Value> {
     let r_px = (radius_um / place.scale()).round().max(6.0) as usize;
     let inv = place.inverse();
     let c = rect.corners().map(|q| l.coords(q));

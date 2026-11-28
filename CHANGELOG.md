@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.21
+- Crosses found right next to their numbers: for the drawing's crosses (arms 5 um each way, numbers about 10 um off) the search goes only 6.5 um around the expected place, so a number is not taken for the cross: in the stitch's pins (anchors.csv now carries the radius; MStitch 0.6.2+), Fit to all crosses, Summary and the export. Before, the 15 - 25 um window took the numbers in, and most crosses were found wrong and dropped (Summary: 1 cross pinned).
+- Cross finder: with a small window the fine pass was narrower than about two arm widths, so the arm filled it and nothing was found; it is now several arm widths across (MStitch 0.6.3 the same).
+- Fit to all crosses grows outwards: the crosses near the signed ones first, the lattice fitted through them, then farther, then all; the export likewise looks for a cross not found where the lattice says where its found neighbours say.
+- Summary: stitches newest first (by when they were stitched); crosses given to pin and found in frames shown.
+
 ## 0.6.20
 - Fix: the exported DXF was the empty template (layers, images, lines all missing) in the Windows builds. Git on Windows checks the template out with CR LF line ends, so its markers were never found. Now found either way and the drawing is written with plain LF; .gitattributes keeps the template as it is.
 

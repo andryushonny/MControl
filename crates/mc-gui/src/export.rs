@@ -105,21 +105,60 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
     // is where the square's corner goes, so in the drawing each cross lands exactly on its place (a corner not
     // found: its lattice place, moved as the found ones are)
     let p = l.pitch();
-    let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
+    // the drawing's crosses: a small radius, so the numbers next to each are not taken for it
+    let radius_um = if o.design.is_some() { 6.5 } else { (0.3 * p[0].min(p[1])).min(25.0) };
     let r_px = (radius_um / src.to_stage.scale()).round().max(6.0) as usize;
-    let mut found: std::collections::HashMap<[i32; 2], Option<P2>> = std::collections::HashMap::new();
-    let mut corner = |c: [i32; 2]| -> Option<P2> {
-        *found.entry(c).or_insert_with(|| {
-            let node = l.at(c[0] as f64, c[1] as f64);
-            if !src.rect.contains(node) {
-                return None;
+    // the crosses found from where the lattice puts them, growing outwards: one not found where the lattice says
+    // is looked for again where its found neighbours say (the lattice may be off far from its crosses by more
+    // than the small radius)
+    let mut nodes: Vec<[i32; 2]> = vec![];
+    for c in &cells {
+        for d in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+            let n = [c[0] + d[0], c[1] + d[1]];
+            if !nodes.contains(&n) {
+                nodes.push(n);
             }
-            let uv = inv.apply(node);
-            let (u, v) = crate::cross::refine(src.map, uv[0], uv[1], r_px)?;
-            let f = src.to_stage.apply([u, v]);
-            (crate::geom::len(crate::geom::sub(f, node)) < radius_um).then_some(f)
-        })
+        }
+    }
+    let mut found: std::collections::HashMap<[i32; 2], Option<P2>> = std::collections::HashMap::new();
+    let look = |near: P2| -> Option<P2> {
+        if !src.rect.contains(near) {
+            return None;
+        }
+        let uv = inv.apply(near);
+        let (u, v) = crate::cross::refine(src.map, uv[0], uv[1], r_px)?;
+        let f = src.to_stage.apply([u, v]);
+        (crate::geom::len(crate::geom::sub(f, near)) < radius_um).then_some(f)
     };
+    for pass in 0..8 {
+        let mut new = 0;
+        for n in &nodes {
+            if found.get(n).is_some_and(|f| f.is_some()) {
+                continue;
+            }
+            let node = l.at(n[0] as f64, n[1] as f64);
+            let guess = if pass == 0 {
+                node
+            } else {
+                // the found within two pitches: their offset from the lattice, averaged
+                let offs: Vec<P2> = found.iter().filter(|(k, f)| f.is_some() && (k[0] - n[0]).abs() <= 2 && (k[1] - n[1]).abs() <= 2).map(|(k, f)| crate::geom::sub(f.unwrap(), l.at(k[0] as f64, k[1] as f64))).collect();
+                if offs.is_empty() {
+                    continue;
+                }
+                let s = offs.iter().fold([0.0, 0.0], |a, b| crate::geom::add(a, *b));
+                crate::geom::add(node, [s[0] / offs.len() as f64, s[1] / offs.len() as f64])
+            };
+            let f = look(guess);
+            if f.is_some() {
+                new += 1;
+            }
+            found.insert(*n, f);
+        }
+        if pass > 0 && new == 0 {
+            break;
+        }
+    }
+    let corner = |c: [i32; 2]| -> Option<P2> { found.get(&c).copied().flatten() };
     for (k, cell) in cells.iter().enumerate() {
         progress(k, cells.len());
         let ids = [[cell[0], cell[1]], [cell[0] + 1, cell[1]], [cell[0], cell[1] + 1], [cell[0] + 1, cell[1] + 1]];
@@ -339,9 +378,9 @@ mod tests {
         let t = 0.4f64.to_radians();
         let k = 1.003;
         // map pixel -> where it truly is on the sample (crosses every 100 um at multiples of 100)
-        // and skewed by 2 % (the stage's axes not quite square): no square lattice goes through all the crosses
-        let truth = Affine([umpp * k * t.cos(), -umpp * k * t.sin() + 0.02 * umpp, 7.0, umpp * k * t.sin(), umpp * k * t.cos(), 4.0]);
-        let (w, h) = (900usize, 800usize);
+        // and skewed by 0.8 % (the stage's axes not quite square): no square lattice goes through all the crosses
+        let truth = Affine([umpp * k * t.cos(), -umpp * k * t.sin() + 0.008 * umpp, 7.0, umpp * k * t.sin(), umpp * k * t.cos(), 4.0]);
+        let (w, h) = (1400usize, 1250usize);
         let mut map = Rgb::new(w, h);
         for v in 0..h {
             for u in 0..w {
@@ -368,12 +407,13 @@ mod tests {
             let q = truth.inverse().apply([100.0 * i as f64, 100.0 * j as f64]);
             (placed.apply(q), [2 + i, 3 + j])
         };
-        let l = Lattice::fit_square(&[mark(1, 1), mark(3, 1), mark(1, 3)]).unwrap();
+        // signed close together (as two neighbouring crosses often are): far from them the lattice misses
+        let l = Lattice::fit_square(&[mark(1, 1), mark(2, 1), mark(1, 2)]).unwrap();
         let d = crate::project::Design { name: "t".into(), origin: [-500.0, 300.0], pitch: [100.0, 100.0], n: [30, 30] };
         let o = Orient::drawing(&d);
         let dir = std::env::temp_dir().join("mc_export_pin");
         let _ = std::fs::remove_dir_all(&dir);
-        let rect = Rect { x0: 60.0, y0: 60.0, x1: 380.0, y1: 340.0 };
+        let rect = Rect { x0: 60.0, y0: 60.0, x1: 660.0, y1: 580.0 };
         let sq = cut(&Source { rect, map: &map, to_stage: placed, opacity: 1.0 }, &l, o, umpp, &dir, &mut |_, _| {}).unwrap();
         // a whole square inside: its corner pixels are on the crosses' centres (dark), its middle is not
         let full: Vec<&Square> = sq.iter().filter(|s| {
@@ -385,8 +425,11 @@ mod tests {
             let img = pixels::read_png(&s.file).unwrap();
             let px = |x: usize, y: usize| img.get(x, y)[0] as i32;
             let (n0, n1) = (s.px[0] - 1, s.px[1] - 1);
-            for (x, y) in [(0, 0), (n0, 0), (0, n1), (n0, n1)] {
-                assert!(px(x, y) < 120, "corner {x},{y} of {:?}: {}", s.cell, px(x, y));
+            // each corner on its cross: the corner dark, and both arms run along the square's edges from it
+            // (8 px = 4 um in: an arm is 3 um wide, so a corner 1.5 um off its cross already misses one)
+            for (x, y, dx, dy) in [(0, 0, 1i64, 1i64), (n0, 0, -1, 1), (0, n1, 1, -1), (n0, n1, -1, -1)] {
+                let at = |ax: i64, ay: i64| px((x as i64 + ax) as usize, (y as i64 + ay) as usize);
+                assert!(at(0, 0) < 120 && at(8 * dx, 0) < 120 && at(0, 8 * dy) < 120, "corner {x},{y} of {:?}: {} {} {}", s.cell, at(0, 0), at(8 * dx, 0), at(0, 8 * dy));
             }
             assert!(px(n0 / 2, n1 / 2) > 190);
         }

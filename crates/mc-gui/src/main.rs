@@ -360,17 +360,24 @@ impl App {
             return;
         };
         let p = l.pitch();
-        let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
+        let radius_um = smp.cross_radius_um(&l);
         let r_px = (radius_um / place.scale()).round().max(6.0) as usize;
         let inv = place.inverse();
         let c = base.rect.corners().map(|q| l.coords(q));
         let (i0, i1) = (c.iter().map(|q| q[0]).fold(f64::MAX, f64::min).ceil() as i32, c.iter().map(|q| q[0]).fold(f64::MIN, f64::max).floor() as i32);
         let (j0, j1) = (c.iter().map(|q| q[1]).fold(f64::MAX, f64::min).ceil() as i32, c.iter().map(|q| q[1]).fold(f64::MIN, f64::max).floor() as i32);
         let signed: Vec<(P2, [i32; 2])> = smp.crosses.iter().filter_map(|c| c.label.map(|k| (c.at, k))).collect();
+        let _ = p;
+        // first the crosses near the signed ones (where the 2-cross lattice is good), the lattice fitted through
+        // them, then all: far away the first lattice may miss by more than the small search radius
+        let near_signed = |i: i32, j: i32, reach: i32| signed.iter().any(|s| (s.1[0] - i).abs() <= reach && (s.1[1] - j).abs() <= reach);
+        let mut l = l;
         let mut found = vec![];
+        for reach in [4, 12, i32::MAX] {
+        found.clear();
         for j in j0..=j1 {
             for i in i0..=i1 {
-                if signed.iter().any(|s| s.1 == [i, j]) {
+                if signed.iter().any(|s| s.1 == [i, j]) || !near_signed(i, j, reach) {
                     continue;
                 }
                 let node = l.at(i as f64, j as f64);
@@ -386,10 +393,16 @@ impl App {
                 }
             }
         }
+        let m: Vec<(P2, [i32; 2])> = signed.iter().cloned().chain(found.iter().cloned()).collect();
+        if let Ok(nl) = if smp.design.is_some() { geom::Lattice::fit_square(&m) } else { geom::Lattice::fit(&m) } {
+            l = nl;
+        }
+        }
         if found.is_empty() {
             self.message = "no other crosses found on the base map".into();
             return;
         }
+        let l0 = self.proj.sample().lattice.clone().unwrap();
         // a speck taken for a cross: off the fit by far more than the others
         let fit = |m: &[(P2, [i32; 2])]| if smp.design.is_some() { geom::Lattice::fit_square(m) } else { geom::Lattice::fit(m) };
         let mut all: Vec<(P2, [i32; 2])> = signed.iter().cloned().chain(found.iter().cloned()).collect();
@@ -408,7 +421,7 @@ impl App {
         let auto: Vec<(P2, [i32; 2])> = all.iter().filter(|m| !signed.iter().any(|s| s.1 == m.1)).cloned().collect();
         let before = {
             // where the 2-cross lattice put them against where they are
-            let r: Vec<f64> = auto.iter().map(|(p, k)| geom::len(geom::sub(*p, l.at(k[0] as f64, k[1] as f64)))).collect();
+            let r: Vec<f64> = auto.iter().map(|(p, k)| geom::len(geom::sub(*p, l0.at(k[0] as f64, k[1] as f64)))).collect();
             (r.iter().map(|e| e * e).sum::<f64>() / r.len().max(1) as f64).sqrt()
         };
         let smp = self.proj.sample_mut();
@@ -814,6 +827,7 @@ impl App {
             focus: focus::Settings { on: self.proj.scan.autofocus, drop: self.proj.scan.focus_drop, max_um: self.proj.scan.focus_max_um, settle_ms: 0.0, window_um: self.proj.scan.focus_window_um },
             surface: Some(self.proj.path("surface.csv")),
             anchors: self.anchors_for(sel),
+            anchor_radius_um: self.proj.sample().lattice.as_ref().map(|l| self.proj.sample().cross_radius_um(l)).unwrap_or(10.0),
         }
     }
 

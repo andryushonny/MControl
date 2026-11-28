@@ -1325,18 +1325,24 @@ pub fn summary_window(app: &mut App, ctx: &egui::Context) {
     if !app.summary_open {
         return;
     }
-    // every stitch with a map, newest first: (map folder, selection id, label)
+    // every stitch with a map, newest first: (map folder, selection id, label); by when it was stitched (the
+    // summary's time, else the scan's)
     let mut all: Vec<(String, u32, String)> = vec![];
+    let mut when: Vec<String> = vec![];
     for smp in &app.proj.samples {
         for s in &smp.selections {
             for sc in &s.scans {
                 if let Some(m) = &sc.map {
-                    all.push((m.clone(), s.id, format!("{} / {} - {} {}", smp.name, s.name, sc.mode.name(), sc.when)));
+                    let t = summary::read(&app.proj.path(m))["when"].as_str().map(|x| x.to_string()).unwrap_or_else(|| sc.when.clone());
+                    all.push((m.clone(), s.id, format!("{t}  {} / {} - {}", smp.name, s.name, sc.mode.name())));
+                    when.push(t);
                 }
             }
         }
     }
-    all.sort_by(|a, b| b.2.split(" - ").nth(1).cmp(&a.2.split(" - ").nth(1)));
+    let mut order: Vec<usize> = (0..all.len()).collect();
+    order.sort_by(|&a, &b| when[b].cmp(&when[a]));
+    let all: Vec<(String, u32, String)> = order.into_iter().map(|k| all[k].clone()).collect();
     if app.summary_pick.as_ref().is_none_or(|p| !all.iter().any(|a| &a.0 == p)) {
         app.summary_pick = all.first().map(|a| a.0.clone());
     }
@@ -1385,7 +1391,7 @@ pub fn summary_window(app: &mut App, ctx: &egui::Context) {
             if let (Some(l), Some(sel)) = (app.proj.sample().lattice.clone(), all.iter().find(|a| a.0 == pick).and_then(|a| app.proj.samples.iter().flat_map(|s| s.selections.iter()).find(|s| s.id == a.1)).cloned()) {
                 if sel.best_scan().and_then(|b| b.map.clone()).as_deref() == Some(pick.as_str()) {
                     if let Some((pic, place)) = app.map_of(&sel) {
-                        if let Some(c) = summary::crosses(&l, &sel.rect, pic.pyr.base(), &place, app.proj.sample().design.as_ref().map(|d| d.pitch)) {
+                        if let Some(c) = summary::crosses(&l, &sel.rect, pic.pyr.base(), &place, app.proj.sample().design.as_ref().map(|d| d.pitch), app.proj.sample().cross_radius_um(&l)) {
                             v["crosses"] = c;
                             summary::write(&dir, &v);
                         }

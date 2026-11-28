@@ -111,6 +111,18 @@ impl Sample {
             && signed.iter().zip(&self.auto_for).all(|(a, b)| a.1 == b.1 && (a.0[0] - b.0[0]).abs() < 1e-6 && (a.0[1] - b.0[1]).abs() < 1e-6)
     }
 
+    /// How far around a cross's expected place to look for it (um): for the drawing's crosses (arms 5 um each
+    /// way, numbers about 10 um off) small, so a number is not taken for the cross; else a part of the pitch.
+    pub fn cross_radius_um(&self, l: &Lattice) -> f64 {
+        match &self.design {
+            Some(_) => 6.5,
+            None => {
+                let p = l.pitch();
+                (0.3 * p[0].min(p[1])).min(25.0)
+            }
+        }
+    }
+
     /// Where the crosses truly are, for pinning: the lattice, at the drawing's pitch when the sample has one.
     pub fn true_lattice(&self) -> Option<Lattice> {
         let l = self.lattice.clone()?;
