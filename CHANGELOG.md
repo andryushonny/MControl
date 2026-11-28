@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.22
+- Quality scans in rounds (Settings, *Quality rounds*, default 3; quick: always 1). Each round is scanned and stitched anew, and they really differ: round 1 as usual; round 2 column by column, 5 % more overlap, the frames' grid shifted so the objects the earlier rounds found (MStitch's objects.csv, 0.6.4+) sit whole and near the middle of a frame; round 3 from the far corner back, 10 % more overlap, shifted elsewhere; further rounds go round these. A shift is never within a fifth of a pitch of one used before; the overlap comes back down if a round would go over the frame limit.
+- When all rounds are done they are voted on by every Summary number with a target: each ranks the rounds, the ranks are averaged (crosses' and pairs' numbers count double), the lowest wins and becomes the selection's map. Summary shows round k/N and (chosen). Every round's settings (overlap, shift, order), its numbers and the vote are appended to rounds.csv in the project, for finding the best settings later.
+
 ## 0.6.21
 - Crosses found right next to their numbers: for the drawing's crosses (arms 5 um each way, numbers about 10 um off) the search goes only 6.5 um around the expected place, so a number is not taken for the cross: in the stitch's pins (anchors.csv now carries the radius; MStitch 0.6.2+), Fit to all crosses, Summary and the export. Before, the 15 - 25 um window took the numbers in, and most crosses were found wrong and dropped (Summary: 1 cross pinned).
 - Cross finder: with a small window the fine pass was narrower than about two arm widths, so the arm filled it and nothing was found; it is now several arm widths across (MStitch 0.6.3 the same).

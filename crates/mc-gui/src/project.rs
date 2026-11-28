@@ -31,10 +31,16 @@ pub struct Scan {
     pub when: String,
     #[serde(default)]
     pub note: String,
+    /// a round of a quality scan in several
+    #[serde(default)]
+    pub variant: Option<crate::scan::Variant>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Selection {
+    /// the map chosen by the rounds' vote (its folder)
+    #[serde(default)]
+    pub chosen: Option<String>,
     pub id: u32,
     pub name: String,
     pub rect: Rect,
@@ -62,6 +68,15 @@ fn opaque() -> f32 {
 impl Selection {
     /// The map shown and cut: the newest quality scan, else the newest quick one.
     pub fn best_scan(&self) -> Option<&Scan> {
+        // the round chosen by vote, while it is the latest group of rounds
+        if let Some(c) = &self.chosen {
+            if let Some(sc) = self.scans.iter().find(|s| s.map.as_deref() == Some(c.as_str())) {
+                let later = self.scans.iter().rev().take_while(|s| s.map.as_deref() != Some(c.as_str())).any(|s| s.map.is_some() && s.variant.as_ref().map(|v| &v.group) != sc.variant.as_ref().map(|v| &v.group));
+                if !later {
+                    return Some(sc);
+                }
+            }
+        }
         let done = |m: Mode| self.scans.iter().rev().find(|s| s.mode == m && s.map.is_some());
         done(Mode::Quality).or_else(|| done(Mode::Quick))
     }
@@ -192,6 +207,9 @@ pub struct ScanSettings {
     /// how far up and down in z the scale is measured (Calibrate, Scale vs focus)
     #[serde(default = "zscale_dz")]
     pub zscale_dz_um: f64,
+    /// rounds of a quality scan (each scanned and stitched anew, the best kept by vote); quick: always 1
+    #[serde(default = "quality_rounds")]
+    pub quality_rounds: usize,
     /// blurred: less sharp than this part of the last sharp frames
     #[serde(default = "focus_drop")]
     pub focus_drop: f64,
@@ -219,7 +237,7 @@ fn focus_max() -> f64 {
 
 impl Default for ScanSettings {
     fn default() -> Self {
-        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), zscale_dz_um: zscale_dz(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), zscale_dz_um: zscale_dz(), quality_rounds: quality_rounds(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
     }
 }
 
@@ -349,6 +367,7 @@ impl Project {
         let color = COLORS[(id as usize - 1) % COLORS.len()];
         let objective = self.optics().objective.clone();
         self.sample_mut().selections.insert(0, Selection {
+            chosen: None,
             id,
             name: format!("Selection {}", n + 1),
             rect,
@@ -402,4 +421,8 @@ impl Design {
 
 fn zscale_dz() -> f64 {
     5.0
+}
+
+fn quality_rounds() -> usize {
+    3
 }

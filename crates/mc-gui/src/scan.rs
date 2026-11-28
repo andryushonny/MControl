@@ -46,6 +46,60 @@ pub fn plan(rect: &Rect, optics: &Optics, overlap: f64, step_um: f64) -> Vec<Vec
     ys.iter().map(|&y| xs.iter().map(|&x| [x, y]).collect()).collect()
 }
 
+/// One round of a quality scan in several (each scanned and stitched anew, the best kept by vote): how this one
+/// differs from the others. The frames' grid is shifted by `offset_um` (within one pitch), the overlap changed,
+/// the frames taken column by column instead of row by row, or from the far corner back.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Variant {
+    pub group: String,
+    pub round: usize,
+    pub of: usize,
+    pub overlap: f64,
+    pub offset_um: [f64; 2],
+    pub column_major: bool,
+    pub reverse: bool,
+}
+
+/// The frames' centres for a round: the grid at exactly the pitch of its overlap, shifted back by the offset,
+/// as many frames as it takes to still cover the selection.
+pub fn plan_variant(rect: &Rect, optics: &Optics, v: &Variant, step_um: f64) -> Vec<Vec<P2>> {
+    let f = optics.inner_field_um();
+    let axis = |a: f64, b: f64, fw: f64, off: f64| -> Vec<f64> {
+        let pitch = fw * (1.0 - v.overlap);
+        if b - a <= fw && off == 0.0 {
+            return vec![snap_step((a + b) / 2.0, step_um)];
+        }
+        let mut out = vec![];
+        let mut c = a + fw / 2.0 - off.rem_euclid(pitch.max(1e-9));
+        // the first frame must still reach the selection's edge
+        while c - fw / 2.0 > a {
+            c -= pitch;
+        }
+        loop {
+            out.push(snap_step(c, step_um));
+            if c + fw / 2.0 >= b {
+                break;
+            }
+            c += pitch;
+        }
+        out
+    };
+    let xs = axis(rect.x0, rect.x1, f[0], v.offset_um[0]);
+    let ys = axis(rect.y0, rect.y1, f[1], v.offset_um[1]);
+    let mut rows: Vec<Vec<P2>> = if v.column_major {
+        xs.iter().map(|&x| ys.iter().map(|&y| [x, y]).collect()).collect()
+    } else {
+        ys.iter().map(|&y| xs.iter().map(|&x| [x, y]).collect()).collect()
+    };
+    if v.reverse {
+        rows.reverse();
+        for r in rows.iter_mut() {
+            r.reverse();
+        }
+    }
+    rows
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Scanning,
@@ -65,6 +119,7 @@ pub struct Job {
     pub started: Instant,
     pub frames_dir: PathBuf,
     pub map_dir: PathBuf,
+    pub variant: Option<Variant>,
     /// small pictures of the frames taken, for the map: (stage position, picture, full-res px per picture px)
     pub thumbs: Vec<(P2, Arc<Rgb>, f64)>,
     pub stop: bool,
@@ -85,6 +140,8 @@ impl Job {
 }
 
 pub struct Settings {
+    /// a round of several: its own grid, order and overlap
+    pub variant: Option<Variant>,
     pub optics: Optics,
     pub overlap: f64,
     pub settle_ms: f64,
@@ -103,7 +160,10 @@ pub struct Settings {
 
 /// Scan `rect` into `frames_dir`, then stitch into `map_dir`. Runs on its own thread.
 pub fn start(link: Arc<Link>, selection: u32, mode: Mode, rect: Rect, s: Settings, frames_dir: PathBuf, map_dir: PathBuf) -> Arc<Mutex<Job>> {
-    let rows = plan(&rect, &s.optics, s.overlap, s.step_um);
+    let rows = match &s.variant {
+        Some(v) => plan_variant(&rect, &s.optics, v, s.step_um),
+        None => plan(&rect, &s.optics, s.overlap, s.step_um),
+    };
     let total = rows.iter().map(|r| r.len()).sum();
     let job = Arc::new(Mutex::new(Job {
         selection,
@@ -114,6 +174,7 @@ pub fn start(link: Arc<Link>, selection: u32, mode: Mode, rect: Rect, s: Setting
         started: Instant::now(),
         frames_dir: frames_dir.clone(),
         map_dir: map_dir.clone(),
+        variant: s.variant.clone(),
         thumbs: vec![],
         stop: false,
         log: vec![],
@@ -156,6 +217,7 @@ pub fn restitch(selection: u32, mode: Mode, s: Settings, frames_dir: PathBuf, ma
         started: Instant::now(),
         frames_dir: frames_dir.clone(),
         map_dir: map_dir.clone(),
+        variant: s.variant.clone(),
         thumbs: vec![],
         stop: false,
         log: vec![],
@@ -434,7 +496,7 @@ mod e2e {
         let id = proj.add_selection(rect);
         let mut result: Option<(Rgb, Affine, f64, Vec<Cross>)> = None;
         for mode in [Mode::Quick, Mode::Quality] {
-            let s = Settings { optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![], anchor_radius_um: 10.0 };
+            let s = Settings { variant: None, optics: proj.optics().clone(), overlap: if mode == Mode::Quick { 0.25 } else { 0.35 }, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0, 1.0, 1.0], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![], anchor_radius_um: 10.0 };
             let base = out.join("scans").join(mode.name());
             let t1 = Instant::now();
             let job = start(link.clone(), id, mode, rect, s, base.join("frames"), base.join("map"));
@@ -598,7 +660,7 @@ mod e2e_lens {
             let id = proj.add_selection(*r);
             let mut ok = None;
             for attempt in 0..4 {
-                let s = Settings { optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![], anchor_radius_um: 10.0 };
+                let s = Settings { variant: None, optics: proj.optics().clone(), overlap: 0.35, settle_ms: 0.0, back_um: 20.0, step_um: proj.step_um, mstitch: std::env::var("MC_MSTITCH").unwrap_or_else(|_| "python -m mstitch".into()), wb: [1.0; 3], focus: crate::focus::Settings { on: false, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: None, anchors: vec![], anchor_radius_um: 10.0 };
                 let base = out.join(format!("scans/s{n}_{attempt}"));
                 let job = start(link.clone(), id, Mode::Quick, *r, s, base.join("frames"), base.join("map"));
                 match wait_scan(&job) {
@@ -689,7 +751,7 @@ mod e2e_focus {
         std::thread::sleep(std::time::Duration::from_millis(300));
         let optics = Optics::guess("sim", 0.22, [1296, 972]);
         let rect = Rect::from_corners([0.0, 0.0], [600.0, 400.0], 5.556);
-        let s = Settings { optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: Some(out.join("surface.csv")), anchors: vec![], anchor_radius_um: 10.0 };
+        let s = Settings { variant: None, optics, overlap: 0.25, settle_ms: 0.0, back_um: 20.0, step_um: 5.556, mstitch: "true".into(), wb: [1.0; 3], focus: crate::focus::Settings { on: true, drop: 0.7, max_um: 100.0, settle_ms: 0.0, window_um: 0.0 }, surface: Some(out.join("surface.csv")), anchors: vec![], anchor_radius_um: 10.0 };
         let job = start(link.clone(), 1, Mode::Quick, rect, s, out.join("scan/frames"), out.join("scan/map"));
         loop {
             let j = job.lock().unwrap();

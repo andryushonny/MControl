@@ -741,6 +741,12 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 changed |= ui.add(egui::Slider::new(&mut app.proj.scan.overlap_quality, 0.05..=0.6)).changed();
             });
             ui.end_row();
+            ui.label("Quality rounds");
+            ui.horizontal(|ui| {
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.quality_rounds).range(1..=9)).changed();
+                ui.label(RichText::new("each scanned and stitched anew, differently (shifted grid, overlap, order); the best by all the Summary's numbers is kept. Quick: always 1").weak().size(11.0));
+            });
+            ui.end_row();
             ui.label("Settle before a frame, ms");
             changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.settle_ms).range(0.0..=2000.0)).changed();
             ui.end_row();
@@ -942,7 +948,10 @@ pub fn queue(app: &mut App, ctx: &egui::Context) {
                 let name = sels.iter().find(|s| s.id == t.selection).map(|s| s.name.clone()).unwrap_or_default();
                 ui.label(format!("{}.", k + 1));
                 ui.label(&t.objective);
-                ui.label(format!("{} {name}", t.mode.name()));
+                ui.label(match &t.round {
+                    Some((_, k, of)) => format!("{} {name}, round {k}/{of}", t.mode.name()),
+                    None => format!("{} {name}", t.mode.name()),
+                });
                 ui.label(format!("{} frames, ~{}", t.frames, mmss(t.frames as f64 * app.sec_per_frame)));
                 ui.horizontal(|ui| {
                     if ui.small_button("Up").clicked() {
@@ -1334,7 +1343,8 @@ pub fn summary_window(app: &mut App, ctx: &egui::Context) {
             for sc in &s.scans {
                 if let Some(m) = &sc.map {
                     let t = summary::read(&app.proj.path(m))["when"].as_str().map(|x| x.to_string()).unwrap_or_else(|| sc.when.clone());
-                    all.push((m.clone(), s.id, format!("{t}  {} / {} - {}", smp.name, s.name, sc.mode.name())));
+                    let round = sc.variant.as_ref().map(|v| format!(" round {}/{}{}", v.round, v.of, if s.chosen.as_deref() == Some(m.as_str()) { " (chosen)" } else { "" })).unwrap_or_default();
+                    all.push((m.clone(), s.id, format!("{t}  {} / {} - {}{round}", smp.name, s.name, sc.mode.name())));
                     when.push(t);
                 }
             }

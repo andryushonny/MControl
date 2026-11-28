@@ -63,6 +63,8 @@ pub struct Task {
     pub mode: project::Mode,
     pub objective: String,
     pub frames: usize,
+    /// a round of a quality scan in several: (group, round, of)
+    pub round: Option<(String, usize, usize)>,
 }
 
 pub struct ExportState {
@@ -765,6 +767,7 @@ impl App {
                 map: (jb.phase == scan::Phase::Done).then(|| rel(&jb.map_dir)),
                 n_frames: jb.done,
                 when: now_text(),
+                variant: jb.variant.clone(),
                 note: match &jb.phase {
                     scan::Phase::Failed(e) => e.clone(),
                     scan::Phase::Stopped => "stopped".into(),
@@ -800,8 +803,12 @@ impl App {
                         v["mstitch"] = m;
                     }
                 }
+                if let Some(var) = &jb.variant {
+                    v["round"] = json!(var);
+                }
                 summary::write(&jb.map_dir, &v);
             }
+            let group = jb.variant.as_ref().map(|v| v.group.clone());
             drop(jb);
             self.finished = Some(chrono::Local::now().format("%H:%M").to_string());
             if let Some(s) = self.proj.selection_mut(id) {
@@ -812,11 +819,16 @@ impl App {
                 s.scans.push(entry);
             }
             self.changed();
+            // the last round of a group: vote
+            if let Some(g) = group {
+                self.vote(id, &g);
+            }
         }
     }
 
     pub fn scan_settings(&self, sel: &project::Selection, mode: project::Mode) -> scan::Settings {
         scan::Settings {
+            variant: None,
             optics: self.proj.optics_of(&sel).clone(),
             overlap: if mode == project::Mode::Quick { self.proj.scan.overlap_quick } else { self.proj.scan.overlap_quality },
             settle_ms: self.proj.scan.settle_ms,
@@ -876,6 +888,164 @@ impl App {
         self.message = format!("{}: stitching the {} scan again", sel.name, sc.mode.name());
     }
 
+    /// One round of a quality scan in several, each really different from the others: round 1 as usual; round 2
+    /// column by column, a little more overlap, the grid shifted so the objects found so far sit well inside
+    /// frames; round 3 from the far corner back, more overlap again, shifted elsewhere; further rounds go round
+    /// these. A shift is never near one used before.
+    pub fn start_round(&mut self, id: u32, group: String, k: usize, of: usize) {
+        let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
+        let mut s = self.scan_settings(&sel, project::Mode::Quality);
+        let base = self.proj.scan.overlap_quality;
+        let f = s.optics.inner_field_um();
+        let extra = [0.0, 0.05, 0.10][(k - 1) % 3];
+        let mut v = scan::Variant { group: group.clone(), round: k, of, overlap: (base + extra).min(0.6), offset_um: [0.0, 0.0], column_major: k % 2 == 0, reverse: k % 3 == 0 };
+        // the shifts used so far in this group, and the objects the earlier rounds found
+        let earlier: Vec<scan::Variant> = sel.scans.iter().filter_map(|sc| sc.variant.clone()).filter(|w| w.group == group).collect();
+        let mut objects: Vec<(P2, P2, bool)> = vec![];
+        for sc in sel.scans.iter().filter(|sc| sc.variant.as_ref().is_some_and(|w| w.group == group)) {
+            if let Some(m) = &sc.map {
+                if let Ok(t) = std::fs::read_to_string(self.proj.path(m).join("objects.csv")) {
+                    for l in t.lines().skip(1) {
+                        let x: Vec<f64> = l.split(',').filter_map(|q| q.parse().ok()).collect();
+                        if x.len() >= 5 {
+                            objects.push(([x[0], x[1]], [x[2], x[3]], x[4] > 0.5));
+                        }
+                    }
+                }
+            }
+        }
+        if k > 1 {
+            let pitch = [f[0] * (1.0 - v.overlap), f[1] * (1.0 - v.overlap)];
+            let mut best = (f64::MAX, [0.0, 0.0]);
+            for gy in 0..8 {
+                for gx in 0..8 {
+                    let off = [pitch[0] * (gx as f64 + 0.5) / 8.0, pitch[1] * (gy as f64 + 0.5) / 8.0];
+                    // far from every shift used before (a fifth of a pitch on one axis at least)
+                    let near = earlier.iter().any(|w| (w.offset_um[0] - off[0]).abs() < 0.2 * pitch[0] && (w.offset_um[1] - off[1]).abs() < 0.2 * pitch[1]);
+                    if near {
+                        continue;
+                    }
+                    // objects: each wants a frame holding it whole, as near its centre as can be
+                    let trial = scan::Variant { offset_um: off, ..v.clone() };
+                    let centres: Vec<P2> = scan::plan_variant(&sel.rect, &s.optics, &trial, self.proj.step_um).into_iter().flatten().collect();
+                    let mut cost = 0.0;
+                    for (c, size, _) in &objects {
+                        let mut best_o = 4.0;
+                        for fc in &centres {
+                            let (dx, dy) = ((c[0] - fc[0]).abs(), (c[1] - fc[1]).abs());
+                            let inside = dx + size[0] / 2.0 <= f[0] / 2.0 && dy + size[1] / 2.0 <= f[1] / 2.0;
+                            let o = if inside { (dx / (f[0] / 2.0)).max(dy / (f[1] / 2.0)) } else { 4.0 };
+                            if o < best_o {
+                                best_o = o;
+                            }
+                        }
+                        cost += best_o;
+                    }
+                    // with no objects known: as far from the earlier shifts as can be
+                    let spread = earlier.iter().map(|w| ((w.offset_um[0] - off[0]) / pitch[0]).abs() + ((w.offset_um[1] - off[1]) / pitch[1]).abs()).fold(f64::MAX, f64::min);
+                    let cost = cost - 0.01 * spread.min(10.0);
+                    if cost < best.0 {
+                        best = (cost, off);
+                    }
+                }
+            }
+            v.offset_um = best.1;
+        }
+        // within the frame limit: less overlap if it would take too many
+        while v.overlap > base && scan::plan_variant(&sel.rect, &s.optics, &v, self.proj.step_um).iter().map(|r| r.len()).sum::<usize>() > scan::limit(project::Mode::Quality) {
+            v.overlap = (v.overlap - 0.025).max(base);
+        }
+        s.overlap = v.overlap;
+        s.variant = Some(v);
+        let stamp = now_text().replace([':', ' '], "-");
+        let base_dir = format!("scans/{}_{}_r{k}of{of}_{}", export::layer_name(&sel.name), project::Mode::Quality.name(), stamp);
+        let job = scan::start(self.link.clone(), id, project::Mode::Quality, sel.rect, s, self.proj.path(&format!("{base_dir}/frames")), self.proj.path(&format!("{base_dir}/map")));
+        self.jobs.push(job);
+        self.message = format!("{}: quality round {k} of {of}", sel.name);
+    }
+
+    /// All rounds of a group done: each metric ranks the rounds (best 1), the ranks are averaged (the crosses' and
+    /// the pairs' numbers count double), the lowest wins and becomes the selection's map. Every round's numbers,
+    /// how it was scanned and the vote go to rounds.csv in the project, for finding the best settings later.
+    fn vote(&mut self, id: u32, group: &str) {
+        let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
+        let rounds: Vec<(String, scan::Variant)> = sel.scans.iter().filter_map(|sc| Some((sc.map.clone()?, sc.variant.clone()?))).filter(|(_, v)| v.group == group).collect();
+        let Some(of) = rounds.first().map(|r| r.1.of) else { return };
+        let all_ended = sel.scans.iter().filter(|sc| sc.variant.as_ref().is_some_and(|v| v.group == group)).count() >= of;
+        if !all_ended || self.queue.iter().any(|t| t.round.as_ref().is_some_and(|r| r.0 == group)) {
+            return;
+        }
+        let sums: Vec<serde_json::Value> = rounds.iter().map(|(m, _)| summary::read(&self.proj.path(m))).collect();
+        let n = rounds.len();
+        let mut score = vec![0.0f64; n];
+        let mut weight = 0.0;
+        for m in summary::METRICS.iter().filter(|m| m.target.is_some()) {
+            let vals: Vec<Option<f64>> = sums.iter().map(|v| summary::get(v, m.key)).collect();
+            if n < 2 || vals.iter().any(|x| x.is_none()) {
+                continue;
+            }
+            // smaller is better, after turning the value so
+            let key: Vec<f64> = vals.iter().map(|x| {
+                let x = x.unwrap();
+                let x = if m.abs { x.abs() } else { x };
+                if m.smaller { x } else { -x }
+            }).collect();
+            let w = if m.key.starts_with("crosses.") || m.key == "mstitch.anchor_rms_px" || m.key == "mstitch.pair_rms_px" { 2.0 } else { 1.0 };
+            for i in 0..n {
+                // rank: 1 + how many are better, ties shared
+                let better = key.iter().filter(|&&k| k < key[i] - 1e-12).count() as f64;
+                let same = key.iter().filter(|&&k| (k - key[i]).abs() <= 1e-12).count() as f64;
+                score[i] += w * (1.0 + better + (same - 1.0) / 2.0);
+            }
+            weight += w;
+        }
+        let win = (0..n).min_by(|&a, &b| score[a].partial_cmp(&score[b]).unwrap()).unwrap_or(0);
+        // the vote into each round's summary, and every round into rounds.csv
+        let csv = self.proj.path("rounds.csv");
+        let new_file = !csv.exists();
+        let mut text = String::new();
+        if new_file {
+            text += "when,group,selection,objective,round,of,overlap,offset_x_um,offset_y_um,column_major,reverse,frames,score,chosen";
+            for m in summary::METRICS {
+                text += &format!(",{}", m.key);
+            }
+            text.push('\n');
+        }
+        for (i, ((m, v), s)) in rounds.iter().zip(&sums).enumerate() {
+            let sc = if weight > 0.0 { score[i] / weight } else { 0.0 };
+            let mut s2 = s.clone();
+            s2["vote"] = json!({"score": sc, "chosen": i == win, "rounds": n});
+            s2["round"] = json!(v);
+            summary::write(&self.proj.path(m), &s2);
+            text += &format!(
+                "{},{},{},{},{},{},{:.3},{:.2},{:.2},{},{},{},{:.3},{}",
+                now_text(), v.group, sel.name.replace(',', ";"), sel.objective, v.round, v.of, v.overlap, v.offset_um[0], v.offset_um[1], v.column_major, v.reverse,
+                s["frames"].as_u64().unwrap_or(0), sc, i == win
+            );
+            for mt in summary::METRICS {
+                text += &format!(",{}", summary::get(s, mt.key).map(|x| format!("{x}")).unwrap_or_default());
+            }
+            text.push('\n');
+        }
+        use std::io::Write;
+        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&csv) {
+            let _ = fh.write_all(text.as_bytes());
+        }
+        let chosen = rounds[win].0.clone();
+        if let Some(x) = self.proj.selection_mut(id) {
+            x.chosen = Some(chosen);
+            x.fix = None;
+        }
+        self.message = format!(
+            "{}: {} rounds voted, round {} chosen (average rank {}); all in rounds.csv",
+            sel.name,
+            n,
+            rounds[win].1.round,
+            if weight > 0.0 { format!("{:.2}", score[win] / weight) } else { "-".into() }
+        );
+        self.changed();
+    }
+
     pub fn start_scan(&mut self, id: u32, mode: project::Mode) {
         let Some(sel) = self.proj.sample().selections.iter().find(|s| s.id == id).cloned() else { return };
         let stamp = now_text().replace([':', ' '], "-");
@@ -902,7 +1072,16 @@ impl App {
         if self.queue.iter().any(|t| t.selection == id && t.mode == mode) {
             return;
         }
-        self.queue.push(Task { selection: id, mode, objective: self.proj.optics_of(&sel).objective.clone(), frames: n });
+        let objective = self.proj.optics_of(&sel).objective.clone();
+        let rounds = if mode == project::Mode::Quality { self.proj.scan.quality_rounds.max(1) } else { 1 };
+        if rounds == 1 {
+            self.queue.push(Task { selection: id, mode, objective, frames: n, round: None });
+        } else {
+            let group = format!("{}_{}", export::layer_name(&sel.name), now_text().replace([':', ' '], "-"));
+            for k in 1..=rounds {
+                self.queue.push(Task { selection: id, mode, objective: objective.clone(), frames: n, round: Some((group.clone(), k, rounds)) });
+            }
+        }
         self.group_queue();
     }
 
@@ -937,7 +1116,10 @@ impl App {
         match self.queue.iter().position(|t| t.objective == cur) {
             Some(k) => {
                 let t = self.queue.remove(k);
-                self.start_scan(t.selection, t.mode);
+                match &t.round {
+                    Some((g, k, of)) => self.start_round(t.selection, g.clone(), *k, *of),
+                    None => self.start_scan(t.selection, t.mode),
+                }
             }
             None => self.wait_objective = Some(self.queue[0].objective.clone()),
         }
