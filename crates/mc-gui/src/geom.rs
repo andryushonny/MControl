@@ -69,6 +69,11 @@ pub struct Optics {
     /// |q - c| over the half diagonal and c the frame centre. Zero: none. Measured by Calibrate optics.
     #[serde(default)]
     pub k: [f64; 2],
+    /// more of the lens: radial k3 (r^6) and decentering p1, p2 (Brown-Conrady), in the same normalised r
+    #[serde(default)]
+    pub k3: f64,
+    #[serde(default)]
+    pub p: [f64; 2],
     /// the camera's exposure (ms) and gain last used with this objective, given again when it is put on
     #[serde(default)]
     pub camera: Option<[f64; 2]>,
@@ -77,6 +82,9 @@ pub struct Optics {
     pub flat_file: Option<String>,
     #[serde(skip)]
     pub flat: Option<std::sync::Arc<crate::flat::Flat>>,
+    /// how the picture's scale changes with focus: relative change per um of z (+: larger as z grows)
+    #[serde(default)]
+    pub scale_per_um: f64,
     /// what the distortion calibration left (px), when this objective was calibrated
     #[serde(default)]
     pub calib_rms_px: Option<f64>,
@@ -87,7 +95,7 @@ pub struct Optics {
 
 impl Optics {
     pub fn guess(objective: &str, um_per_px: f64, frame: [u32; 2]) -> Optics {
-        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None }
+        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: 0.0, p: [0.0, 0.0], scale_per_um: 0.0 }
     }
 
     /// From an MStitch profile json ({"objective", "m", "frame", ...}).
@@ -109,12 +117,15 @@ impl Optics {
             flat: None,
             flat_strength: 1.0,
             calib_rms_px: None,
+            scale_per_um: 0.0,
+            k3: v["k3"].as_f64().unwrap_or(0.0),
+            p: v["p"].as_array().map(|a| [a.first().and_then(|x| x.as_f64()).unwrap_or(0.0), a.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]).unwrap_or([0.0, 0.0]),
             k: v["k"].as_array().map(|a| [a.first().and_then(|x| x.as_f64()).unwrap_or(0.0), a.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]).unwrap_or([0.0, 0.0]),
         })
     }
 
     pub fn distorted(&self) -> bool {
-        self.k != [0.0, 0.0]
+        self.k != [0.0, 0.0] || self.k3 != 0.0 || self.p != [0.0, 0.0]
     }
 
     fn radial(&self) -> (P2, f64) {
@@ -125,9 +136,18 @@ impl Optics {
     /// Ideal full-resolution pixel (edge based) -> where the lens puts it on the sensor.
     pub fn distort(&self, q: P2) -> P2 {
         let (c, r0) = self.radial();
-        let d = sub(q, c);
-        let r2 = (d[0] * d[0] + d[1] * d[1]) / (r0 * r0);
-        add(c, mul(d, 1.0 + self.k[0] * r2 + self.k[1] * r2 * r2))
+        let (x, y) = ((q[0] - c[0]) / r0, (q[1] - c[1]) / r0);
+        let [xd, yd] = self.lens([x, y]);
+        [c[0] + r0 * xd, c[1] + r0 * yd]
+    }
+
+    /// The lens on normalised coordinates (from the centre, over the half diagonal).
+    fn lens(&self, v: P2) -> P2 {
+        let [x, y] = v;
+        let r2 = x * x + y * y;
+        let rad = 1.0 + self.k[0] * r2 + self.k[1] * r2 * r2 + self.k3 * r2 * r2 * r2;
+        let [p1, p2] = self.p;
+        [x * rad + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x), y * rad + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y]
     }
 
     /// How much a frame with the distortion taken out is zoomed in so every pixel of it is one the lens put
@@ -165,23 +185,24 @@ impl Optics {
     /// Sensor pixel -> ideal pixel (the inverse of `distort`, by iteration; exact to 1e-6 px for real lenses).
     pub fn undistort(&self, p: P2) -> P2 {
         let (c, r0) = self.radial();
-        let d = sub(p, c);
+        let d = [(p[0] - c[0]) / r0, (p[1] - c[1]) / r0];
+        // fixed point: q = d - (lens(q) - q)
         let mut q = d;
-        for _ in 0..20 {
-            let r2 = (q[0] * q[0] + q[1] * q[1]) / (r0 * r0);
-            let n = mul(d, 1.0 / (1.0 + self.k[0] * r2 + self.k[1] * r2 * r2));
-            let done = len(sub(n, q)) < 1e-7;
+        for _ in 0..30 {
+            let l = self.lens(q);
+            let n = [d[0] - (l[0] - q[0]), d[1] - (l[1] - q[1])];
+            let done = len(sub(n, q)) * r0 < 1e-7;
             q = n;
             if done {
                 break;
             }
         }
-        add(c, q)
+        [c[0] + r0 * q[0], c[1] + r0 * q[1]]
     }
 
     /// The profile json MStitch reads (written next to a scan when no measured profile is set).
     pub fn profile_json(&self) -> serde_json::Value {
-        serde_json::json!({"objective": self.objective, "m": self.m, "frame": self.frame, "repeatability_um": 5.0, "k": self.k})
+        serde_json::json!({"objective": self.objective, "m": self.m, "frame": self.frame, "repeatability_um": 5.0, "k": self.k, "k3": self.k3, "p": self.p})
     }
 
     /// m without any small tilt: the nearest of the 8 straight ways (0/90/180/270 degrees, mirrored or not),
@@ -441,7 +462,7 @@ mod tests {
 
     #[test]
     fn optics_round_trip() {
-        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
+        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: 0.0, p: [0.0, 0.0], scale_per_um: 0.0 };
         let p = o.pixel_to_stage([3.0, 4.0], 50.0, 40.0);
         assert!((p[0] - 3.0).abs() < 1e-12 && (p[1] - 4.0).abs() < 1e-12);
         let af = Affine([2.0, 1.0, 5.0, -1.0, 3.0, 7.0]);

@@ -203,7 +203,9 @@ fn run(link: &Link, job: &Mutex<Job>, rows: &[Vec<P2>], s: &Settings, dir: &Path
                 // the flat field first (it belongs to the sensor), then the distortion
                 let mut raw = shot.sensor;
                 let flat = s.optics.flat.as_ref().is_some_and(|fl| fl.apply(&mut raw, s.optics.flat_strength as f32));
-                let sensor = raw.undistorted(&s.optics);
+                // the scale at this frame's focus brought back to the scan's start (a lens not telecentric)
+                let mag = 1.0 + s.optics.scale_per_um * (shot.z - z_start);
+                let sensor = raw.undistorted_scaled(&s.optics, mag);
                 let mut meta = f.meta.clone();
                 if flat {
                     meta["flat_corrected"] = json!(true);
@@ -212,6 +214,9 @@ fn run(link: &Link, job: &Mutex<Job>, rows: &[Vec<P2>], s: &Settings, dir: &Path
                 meta["col"] = json!(i);
                 meta["plan_um"] = json!(p);
                 meta["sharpness"] = json!(shot.sharpness);
+                if mag != 1.0 {
+                    meta["scale_corrected"] = json!(mag);
+                }
                 if s.optics.distorted() {
                     meta["undistorted_k"] = json!(s.optics.k);
                     meta["undistorted_zoom"] = json!(s.optics.zoom());
@@ -252,6 +257,8 @@ fn stitch(s: &Settings, mode: Mode, frames: &Path, map: &Path, job: &Mutex<Job>)
         let z = s.optics.zoom();
         prof["m"] = json!(s.optics.m.map(|v| v / z));
         prof["k"] = json!([0.0, 0.0]);
+        prof["k3"] = json!(0.0);
+        prof["p"] = json!([0.0, 0.0]);
         // the frames are corrected already: MStitch gets an even flat field, so it neither uses its own nor
         // estimates one from the frames
         if let Some((w, h)) = flat {
@@ -543,7 +550,7 @@ mod e2e_lens {
         };
         println!("calibration: {fit:?}");
         {
-            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
+            let truth = Optics { objective: String::new(), m: [1.0 / 0.22, 0.0, 0.0, 1.0 / 0.22], frame: [1296, 972], profile_path: None, k: [k1, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: 0.0, p: [0.0, 0.0], scale_per_um: 0.0 };
             let ms = crate::calib::DEBUG.lock().unwrap().clone();
             let mut res: Vec<f64> = ms.iter().map(|m| {
                 let (a, b) = (truth.undistort(m.p0), truth.undistort(m.p1));

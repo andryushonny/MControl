@@ -24,6 +24,9 @@ pub struct Calib {
 pub struct Fit {
     pub m: [f64; 4],
     pub k: [f64; 2],
+    /// k3 and the decentering p1, p2 (0 unless they make the fit clearly better)
+    pub k3: f64,
+    pub p: [f64; 2],
     /// residual, full-resolution pixels: with m only (no distortion), and with m and the distortion
     pub rms_plain_px: f64,
     pub rms_px: f64,
@@ -90,7 +93,7 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &
     let pairs: Vec<(&[f32], P2)> = (if quick { [1usize, 2] } else { [5usize, 7] }).iter().map(|&k| (frames[k].0 .0.as_slice(), [frames[k].1[0] - at0[0], frames[k].1[1] - at0[1]])).collect();
     let m = orientation(g0, &pairs, *w, *h, o);
     let o_in = o;
-    let o = &Optics { m, k: [0.0, 0.0], ..o.clone() };
+    let o = &Optics { m, k: [0.0, 0.0], k3: 0.0, p: [0.0, 0.0], ..o.clone() };
     st.lock().unwrap().phase = "matching".into();
     let mut ms = vec![];
     for ((g1, _, _), at1) in &frames[1..] {
@@ -102,10 +105,10 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &
     }
     if quick {
         // the turn / mirror found; m (scale and the exact turn) fitted, the lens's distortion kept as it was
-        let keep = Optics { k: o_in.k, ..o.clone() };
+        let keep = Optics { k: o_in.k, k3: o_in.k3, p: o_in.p, ..o.clone() };
         let (m, sse) = solve_m(&ms, &keep);
         let rms = (sse / ms.len() as f64).sqrt();
-        return Ok(Fit { m, k: o_in.k, rms_plain_px: rms, rms_px: rms, matches: ms.len() });
+        return Ok(Fit { m, k: o_in.k, k3: o_in.k3, p: o_in.p, rms_plain_px: rms, rms_px: rms, matches: ms.len() });
     }
     st.lock().unwrap().phase = "fitting".into();
     #[cfg(test)]
@@ -117,10 +120,10 @@ fn run(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, quick: bool, st: &
     // longer scales the two parts of the field differently), so the matches are sharper; back to sensor
     // pixels, fit again
     st.lock().unwrap().phase = "matching again".into();
-    let o1 = Optics { m: first.m, k: first.k, ..o.clone() };
+    let o1 = Optics { m: first.m, k: first.k, k3: first.k3, p: first.p, ..o.clone() };
     let flat: Vec<(Vec<f32>, P2)> = frames.iter().map(|((g, w, h), at)| (undistort_grey(g, *w, *h, &o1), *at)).collect();
     let mut ms2 = vec![];
-    let o_flat = Optics { k: [0.0, 0.0], ..o1.clone() };
+    let o_flat = Optics { k: [0.0, 0.0], k3: 0.0, p: [0.0, 0.0], ..o1.clone() };
     for (g1, at1) in &flat[1..] {
         let d = [at1[0] - flat[0].1[0], at1[1] - flat[0].1[1]];
         for m in match_frames(&flat[0].0, g1, *w, *h, &o_flat, d) {
@@ -161,7 +164,53 @@ fn quick_m(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, st: &Mutex<Cal
     shot?;
     st.lock().unwrap().phase = "comparing".into();
     let m = m_from_frames(&frames)?;
-    Ok(Fit { m, k: o.k, rms_plain_px: 0.0, rms_px: 0.0, matches: 2 })
+    Ok(Fit { m, k: o.k, k3: o.k3, p: o.p, rms_plain_px: 0.0, rms_px: 0.0, matches: 2 })
+}
+
+/// How the scale changes with focus: the scale (from whole frames, as Orientation) at z - dz, z, z + dz.
+pub struct ZCal {
+    pub done: usize,
+    pub total: usize,
+    /// relative change per um, and the three scales (px per um)
+    pub result: Option<Result<(f64, [f64; 3]), String>>,
+}
+
+pub fn start_zscale(link: Arc<Link>, o: Optics, settle_ms: f64, back_um: f64, dz: f64) -> Arc<Mutex<ZCal>> {
+    let st = Arc::new(Mutex::new(ZCal { done: 0, total: 9, result: None }));
+    let s2 = st.clone();
+    std::thread::spawn(move || {
+        let r = run_zscale(&link, &o, settle_ms, back_um, dz, &s2);
+        s2.lock().unwrap().result = Some(r);
+    });
+    st
+}
+
+fn run_zscale(link: &Link, o: &Optics, settle_ms: f64, back_um: f64, dz: f64, st: &Mutex<ZCal>) -> Result<(f64, [f64; 3]), String> {
+    let here = link.stage_pos().ok_or("no stage position yet")?;
+    let f = o.field_um();
+    let d = 0.25 * f[0].min(f[1]);
+    let mut k = [0.0; 3];
+    link.call(json!({"cmd": "begin"}))?;
+    let r = (|| -> Result<(), String> {
+        for (n, z) in [here[2] - dz, here[2], here[2] + dz].into_iter().enumerate() {
+            let mut frames = vec![];
+            for (dx, dy) in [(0.0, 0.0), (d, 0.0), (0.0, d)] {
+                let (x, y) = (here[0] + dx, here[1] + dy);
+                link.call(json!({"cmd": "goto", "x": x - back_um, "y": y - back_um, "z": z}))?;
+                let fr = link.snap(json!({"x": x, "y": y, "z": z, "settle_ms": settle_ms}))?;
+                let xyz = fr.xyz();
+                frames.push((pixels::unpack(&fr.meta, &fr.data)?.grey2(), [xyz[0], xyz[1]]));
+                st.lock().unwrap().done += 1;
+            }
+            let m = m_from_frames(&frames).map_err(|e| format!("at z {z:.1}: {e} (a smaller step in z keeps the picture sharp enough)"))?;
+            k[n] = (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
+        }
+        Ok(())
+    })();
+    let _ = link.call(json!({"cmd": "end"}));
+    let _ = link.call(json!({"cmd": "goto", "x": here[0], "y": here[1], "z": here[2]}));
+    r?;
+    Ok(((k[2] - k[0]) / (2.0 * dz * k[1]), k))
 }
 
 /// m from half-size grey frames: the first, then two taken with the stage moved (not along one line).
@@ -540,7 +589,7 @@ pub fn fit_robust(ms: &[Match], frame: [u32; 2]) -> Fit {
     }
     let mut f = fit(&keep, frame);
     for _ in 0..4 {
-        let o = Optics { objective: String::new(), m: f.m, frame, profile_path: None, k: f.k, camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
+        let o = Optics { objective: String::new(), m: f.m, frame, profile_path: None, k: f.k, camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: f.k3, p: f.p, scale_per_um: 0.0 };
         let res: Vec<f64> = keep.iter().map(|m| residual(m, &o)).collect();
         let lim = (3.0 * med(res.clone())).max(1.0);
         let next: Vec<Match> = keep.iter().zip(&res).filter(|(_, r)| **r <= lim).map(|(m, _)| *m).collect();
@@ -561,51 +610,86 @@ fn residual(mm: &Match, o: &Optics) -> f64 {
 }
 
 pub fn fit(ms: &[Match], frame: [u32; 2]) -> Fit {
-    let optics = |k: [f64; 2]| Optics { objective: String::new(), m: [1.0, 0.0, 0.0, 1.0], frame, profile_path: None, k, camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
-    let cost = |k: [f64; 2]| solve_m(ms, &optics(k)).1;
-    let (_, plain) = solve_m(ms, &optics([0.0, 0.0]));
-    // Nelder-Mead on (k1, k2)
-    let mut s = [[0.0, 0.0], [0.02, 0.0], [0.0, 0.02]];
-    let mut f = s.map(cost);
-    for _ in 0..300 {
-        let mut idx = [0, 1, 2];
-        idx.sort_by(|&i, &j| f[i].partial_cmp(&f[j]).unwrap());
-        let (b, g, wst) = (idx[0], idx[1], idx[2]);
-        if (f[wst] - f[b]).abs() < 1e-12 * (1.0 + f[b]) {
+    // the lens's parameters: k1, k2, k3, p1, p2
+    let optics = |d: &[f64]| Optics {
+        objective: String::new(),
+        m: [1.0, 0.0, 0.0, 1.0],
+        frame,
+        profile_path: None,
+        k: [d[0], d[1]],
+        camera: None,
+        flat_file: None,
+        flat: None,
+        flat_strength: 1.0,
+        calib_rms_px: None,
+        k3: d.get(2).copied().unwrap_or(0.0),
+        p: [d.get(3).copied().unwrap_or(0.0), d.get(4).copied().unwrap_or(0.0)],
+        scale_per_um: 0.0,
+    };
+    let cost = |d: &[f64]| solve_m(ms, &optics(d)).1;
+    let (_, plain) = solve_m(ms, &optics(&[0.0, 0.0]));
+    // first k1, k2; then all five from there, kept only if clearly better (else they would fit the noise)
+    let two = nelder_mead(&cost, &[0.0, 0.0], 0.02, 300);
+    let c2 = cost(&two);
+    let five = nelder_mead(&cost, &[two[0], two[1], 0.0, 0.0, 0.0], 0.005, 1500);
+    let c5 = cost(&five);
+    let d = if c5 < 0.9 * c2 { five } else { vec![two[0], two[1], 0.0, 0.0, 0.0] };
+    let o = optics(&d);
+    let (m, sse) = solve_m(ms, &o);
+    let n = ms.len() as f64;
+    Fit { m, k: o.k, k3: o.k3, p: o.p, rms_plain_px: (plain / n).sqrt(), rms_px: (sse / n).sqrt(), matches: ms.len() }
+}
+
+/// Nelder-Mead minimum of f near x0 (first steps of `step` along each axis).
+fn nelder_mead(f: &dyn Fn(&[f64]) -> f64, x0: &[f64], step: f64, iters: usize) -> Vec<f64> {
+    let n = x0.len();
+    let mut s: Vec<Vec<f64>> = (0..=n).map(|i| {
+        let mut x = x0.to_vec();
+        if i > 0 {
+            x[i - 1] += step;
+        }
+        x
+    }).collect();
+    let mut fs: Vec<f64> = s.iter().map(|x| f(x)).collect();
+    for _ in 0..iters {
+        let mut idx: Vec<usize> = (0..=n).collect();
+        idx.sort_by(|&i, &j| fs[i].partial_cmp(&fs[j]).unwrap());
+        let (b, w, sw) = (idx[0], idx[n], idx[n - 1]);
+        if (fs[w] - fs[b]).abs() < 1e-12 * (1.0 + fs[b]) {
             break;
         }
-        let c = [(s[b][0] + s[g][0]) / 2.0, (s[b][1] + s[g][1]) / 2.0];
-        let at = |t: f64| [c[0] + t * (s[wst][0] - c[0]), c[1] + t * (s[wst][1] - c[1])];
+        let c: Vec<f64> = (0..n).map(|k| idx[..n].iter().map(|&i| s[i][k]).sum::<f64>() / n as f64).collect();
+        let at = |t: f64| -> Vec<f64> { (0..n).map(|k| c[k] + t * (s[w][k] - c[k])).collect() };
         let r = at(-1.0);
-        let fr = cost(r);
-        if fr < f[b] {
+        let fr = f(&r);
+        if fr < fs[b] {
             let e = at(-2.0);
-            let fe = cost(e);
+            let fe = f(&e);
             if fe < fr {
-                (s[wst], f[wst]) = (e, fe);
+                (s[w], fs[w]) = (e, fe);
             } else {
-                (s[wst], f[wst]) = (r, fr);
+                (s[w], fs[w]) = (r, fr);
             }
-        } else if fr < f[g] {
-            (s[wst], f[wst]) = (r, fr);
+        } else if fr < fs[sw] {
+            (s[w], fs[w]) = (r, fr);
         } else {
             let k = at(0.5);
-            let fk = cost(k);
-            if fk < f[wst] {
-                (s[wst], f[wst]) = (k, fk);
+            let fk = f(&k);
+            if fk < fs[w] {
+                (s[w], fs[w]) = (k, fk);
             } else {
-                for i in [g, wst] {
-                    s[i] = [(s[i][0] + s[b][0]) / 2.0, (s[i][1] + s[b][1]) / 2.0];
-                    f[i] = cost(s[i]);
+                let best = s[b].clone();
+                for i in 0..=n {
+                    if i != b {
+                        s[i] = (0..n).map(|k| (s[i][k] + best[k]) / 2.0).collect();
+                        fs[i] = f(&s[i]);
+                    }
                 }
             }
         }
     }
-    let bi = (0..3).min_by(|&i, &j| f[i].partial_cmp(&f[j]).unwrap()).unwrap();
-    let k = s[bi];
-    let (m, sse) = solve_m(ms, &optics(k));
-    let n = ms.len() as f64;
-    Fit { m, k, rms_plain_px: (plain / n).sqrt(), rms_px: (sse / n).sqrt(), matches: ms.len() }
+    let bi = (0..=n).min_by(|&i, &j| fs[i].partial_cmp(&fs[j]).unwrap()).unwrap();
+    s[bi].clone()
 }
 
 #[cfg(test)]
@@ -680,7 +764,7 @@ mod tests {
     /// Features seen through a distorting lens at several stage positions: the fit finds the lens and m back.
     #[test]
     fn finds_distortion_and_m() {
-        let truth = Optics { objective: String::new(), m: [4.5, 0.08, -0.08, 4.5], frame: [2592, 1944], profile_path: None, k: [0.06, -0.01], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
+        let truth = Optics { objective: String::new(), m: [4.5, 0.08, -0.08, 4.5], frame: [2592, 1944], profile_path: None, k: [0.06, -0.01], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: 0.0, p: [0.0, 0.0], scale_per_um: 0.0 };
         let [a, b, c, d] = truth.m;
         let mut ms = vec![];
         for (i, dm) in [[-250.0, -180.0], [250.0, 0.0], [0.0, 180.0], [250.0, 180.0], [-250.0, 0.0]].iter().enumerate() {
@@ -706,5 +790,37 @@ mod tests {
         assert!((f.k[0] - 0.06).abs() < 1e-3 && (f.k[1] + 0.01).abs() < 2e-3, "{:?}", f);
         assert!(f.m.iter().zip(truth.m).all(|(x, y)| (x - y).abs() < 1e-3), "{:?}", f);
         assert!(f.rms_px < 0.01 && f.rms_plain_px > 1.0, "{:?}", f);
+    }
+
+    /// A lens with k3 and decentering too: the five are found (the residual goes to noise), and the inverse of
+    /// the lens is exact.
+    #[test]
+    fn finds_decentering_and_k3() {
+        let frame = [2592u32, 1944];
+        let truth = Optics { objective: String::new(), m: [4.5, 0.02, -0.02, 4.5], frame, profile_path: None, k: [0.05, -0.01], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None, k3: 0.008, p: [0.0015, -0.001], scale_per_um: 0.0 };
+        // round trip
+        for q in [[10.0, 10.0], [2500.0, 100.0], [1296.0, 972.0], [300.0, 1900.0]] {
+            let b = truth.undistort(truth.distort(q));
+            assert!((b[0] - q[0]).abs() < 1e-5 && (b[1] - q[1]).abs() < 1e-5, "{q:?} {b:?}");
+        }
+        let mut ms = vec![];
+        let moves: Vec<P2> = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().map(|(i, j)| [*i as f64 * 170.0, *j as f64 * 130.0]).collect();
+        for d in &moves {
+            for gy in 0..14 {
+                for gx in 0..18 {
+                    // an ideal point seen at q in the middle frame; in the moved one at q - m d
+                    let q = [80.0 + gx as f64 * 140.0, 70.0 + gy as f64 * 135.0];
+                    let m = truth.m;
+                    let q1 = [q[0] - (m[0] * d[0] + m[1] * d[1]), q[1] - (m[2] * d[0] + m[3] * d[1])];
+                    if q1[0] < 20.0 || q1[1] < 20.0 || q1[0] > 2570.0 || q1[1] > 1920.0 {
+                        continue;
+                    }
+                    ms.push(Match { p0: truth.distort(q), p1: truth.distort(q1), d_um: *d });
+                }
+            }
+        }
+        let f = fit(&ms, frame);
+        assert!(f.rms_px < 0.05, "{f:?}");
+        assert!((f.p[0] - 0.0015).abs() < 3e-4 && (f.p[1] + 0.001).abs() < 3e-4, "{f:?}");
     }
 }

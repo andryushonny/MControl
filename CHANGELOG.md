@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.16
+- The lens, more of it: radial k3 (r^6) and decentering p1, p2 (Brown-Conrady) besides k1, k2. *Calibrate, Distortion* fits k1, k2 first, then all five, and keeps the five only if they lower what is left by more than 10 % (else they would fit the noise). Settings shows and edits them. On a synthetic lens with all five: what is left < 0.05 px, p1, p2 found to 3e-4.
+- *Calibrate, Scale vs focus*: the scale measured from whole frames at z - dz, z, z + dz (dz in Settings, default 5 um): ppm per um of focus. Each scanned frame is then brought to the scale at the scan's start (resampled with the distortion, one pass), so frames taken at another focus do not stretch the map.
+
 ## 0.6.15
 - The sample's lithography crosses, chosen once per sample (Lattice panel, *Crosses*): *Optical 30 x 30, 200 um* (opt_7x7_with_el_lit_1) or *E-beam 56 x 56, 90 um* (el_lit_mark); cross (X, Y) at its drawing coordinates. Changing it after crosses are signed asks twice. Numbers outside the drawing are shown in red; the pitch the stage sees against the drawing's (ppm).
 - With a drawing the lattice is square (one pitch, right angle; 3+ crosses: least squares, mirrored or not).

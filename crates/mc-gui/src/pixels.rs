@@ -201,12 +201,19 @@ impl Sensor {
     /// same kind of data for MStitch, only without distortion. Zoomed in by `Optics::zoom` (same centre),
     /// so it has m / zoom pixels per um.
     pub fn undistorted(&self, o: &Optics) -> Sensor {
-        if !o.distorted() {
+        self.undistorted_scaled(o, 1.0)
+    }
+
+    /// As `undistorted`, the picture also brought from magnification `mag` (relative: 1.003 = 0.3 % larger, as
+    /// at another focus) back to 1.
+    pub fn undistorted_scaled(&self, o: &Optics, mag: f64) -> Sensor {
+        if !o.distorted() && mag == 1.0 {
             return Sensor { w: self.w, h: self.h, bits: self.bits, fmt: self.fmt.clone(), v: self.v.clone() };
         }
         let step = if self.fmt.starts_with("bayer") { 2 } else { 1 };
-        // zoomed in a little where the lens pushed the edges out, so the frame holds no pixel it did not see
-        let z = o.zoom();
+        // zoomed in a little where the lens pushed the edges out, so the frame holds no pixel it did not see;
+        // and by the magnification (a larger picture is sampled farther out)
+        let z = o.zoom() * mag;
         let c = [o.frame[0] as f64 / 2.0, o.frame[1] as f64 / 2.0];
         // the optics are for full frames of this size: scale if the frame is binned or cropped differently
         let (sx, sy) = (o.frame[0] as f64 / self.w as f64, o.frame[1] as f64 / self.h as f64);
@@ -389,5 +396,27 @@ mod tests {
         let c = s.rgb(1);
         assert_eq!((c.w, c.h), (4, 3));
         assert_eq!(c.get(0, 0)[0], raw[0].max(1)); // R of the first cell (a dark pixel is 1 at least)
+    }
+
+    /// A picture 1 % larger (another focus) brought back by undistorted_scaled: as the one at 1.
+    #[test]
+    fn scale_brought_back() {
+        let (w, h) = (400usize, 300usize);
+        let pic = |mag: f64| {
+            let mut v = vec![0u16; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    // smooth rings about the centre, magnified by mag
+                    let (dx, dy) = ((x as f64 + 0.5 - 200.0) / mag, (y as f64 + 0.5 - 150.0) / mag);
+                    v[y * w + x] = (128.0 + 100.0 * ((dx * dx + dy * dy).sqrt() / 9.0).sin()) as u16;
+                }
+            }
+            Sensor { w, h, bits: 8, fmt: "mono8".into(), v }
+        };
+        let o = Optics::guess("t", 1.0, [w as u32, h as u32]);
+        let (a, b) = (pic(1.0), pic(1.01).undistorted_scaled(&o, 1.01));
+        let err: f64 = a.v.iter().zip(&b.v).map(|(p, q)| (*p as f64 - *q as f64).abs()).sum::<f64>() / a.v.len() as f64;
+        let before: f64 = a.v.iter().zip(&pic(1.01).v).map(|(p, q)| (*p as f64 - *q as f64).abs()).sum::<f64>() / a.v.len() as f64;
+        assert!(err < 0.25 * before, "after {err}, before {before}");
     }
 }

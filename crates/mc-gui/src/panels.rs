@@ -79,6 +79,14 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
                     app.start_flat();
                     ui.close();
                 }
+                let zcan = app.zcal.is_none() && app.calib.is_none() && app.link.stage_pos().is_some();
+                if ui.add_enabled(zcan, egui::Button::new("Scale vs focus"))
+                    .on_hover_text("the scale measured at z - dz, z, z + dz (Settings): how much the picture grows with focus; each scanned frame is then brought to the scale at the scan's start")
+                    .clicked()
+                {
+                    app.start_zscale();
+                    ui.close();
+                }
                 if app.proj.optics().flat.is_some() && ui.button("Flat field off").on_hover_text("no correction for this objective").clicked() {
                     app.flat_off();
                     ui.close();
@@ -632,6 +640,13 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().k[1]).speed(0.0005).range(-0.5..=0.5).fixed_decimals(4)).changed();
             });
             ui.end_row();
+            ui.label("Lens k3, decentering p1, p2");
+            ui.horizontal(|ui| {
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().k3).speed(0.0005).range(-0.5..=0.5).fixed_decimals(4)).changed();
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().p[0]).speed(0.0001).range(-0.05..=0.05).fixed_decimals(5)).changed();
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().p[1]).speed(0.0001).range(-0.05..=0.05).fixed_decimals(5)).changed();
+            });
+            ui.end_row();
             ui.label("Calibrate optics");
             ui.horizontal(|ui| {
                 let busy = app.calib.is_some();
@@ -730,6 +745,14 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 });
             });
             ui.end_row();
+            ui.label("Scale vs focus");
+            ui.horizontal(|ui| {
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.optics_mut().scale_per_um).speed(1e-7).range(-1e-3..=1e-3).custom_formatter(|v, _| format!("{:+.1} ppm/um", v * 1e6)).custom_parser(|t| t.trim().trim_end_matches("ppm/um").trim().parse::<f64>().ok().map(|v| v / 1e6))).changed();
+                ui.label("measured +-");
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.zscale_dz_um).speed(0.5).range(0.5..=100.0)).changed();
+                ui.label("um");
+            });
+            ui.end_row();
             ui.label("Autofocus window, +- um");
             ui.horizontal(|ui| {
                 changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.focus_window_um).speed(1.0).range(0.0..=2000.0)).changed();
@@ -826,6 +849,12 @@ pub fn status(app: &mut App, ui: &mut egui::Ui) {
                     }
                     _ => {}
                 }
+                ui.separator();
+            }
+            if let Some(j) = &app.zcal {
+                let j = j.lock().unwrap();
+                ui.label("scale vs focus");
+                blocks(ui, j.done as f32 / j.total.max(1) as f32, 120.0, &format!("{}/{}", j.done, j.total));
                 ui.separator();
             }
             if let Some(j) = &app.flat_job {

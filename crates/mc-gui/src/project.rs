@@ -144,6 +144,9 @@ pub struct ScanSettings {
     /// the autofocus keeps z within +- this of where the scan started (0: no limit)
     #[serde(default = "focus_window")]
     pub focus_window_um: f64,
+    /// how far up and down in z the scale is measured (Calibrate, Scale vs focus)
+    #[serde(default = "zscale_dz")]
+    pub zscale_dz_um: f64,
     /// blurred: less sharp than this part of the last sharp frames
     #[serde(default = "focus_drop")]
     pub focus_drop: f64,
@@ -171,7 +174,7 @@ fn focus_max() -> f64 {
 
 impl Default for ScanSettings {
     fn default() -> Self {
-        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), zscale_dz_um: zscale_dz(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
     }
 }
 
@@ -350,4 +353,8 @@ impl Design {
             Design { name: "E-beam 56 x 56, 90 um (el_lit_mark)".into(), origin: [-2528.144, -2436.398], pitch: [90.0, 90.0], n: [56, 56] },
         ]
     }
+}
+
+fn zscale_dz() -> f64 {
+    5.0
 }

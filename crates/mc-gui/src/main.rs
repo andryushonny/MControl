@@ -153,6 +153,8 @@ pub struct App {
     pub corner_shown: bool,
     /// the arrows move the stage itself the way they point (else the picture: the view goes that way)
     pub arrows_move_stage: bool,
+    /// the scale being measured at three focus heights
+    pub zcal: Option<Arc<Mutex<calib::ZCal>>>,
     /// a flat field being taken
     pub flat_job: Option<Arc<Mutex<flat::Job>>>,
     pub summary_open: bool,
@@ -235,6 +237,7 @@ impl App {
             keys_open: false,
             capturing: None,
             flat_job: None,
+            zcal: None,
             corner_job: None,
             corner: None,
             corner_shown: false,
@@ -502,6 +505,31 @@ impl App {
         );
     }
 
+    /// The scale at z - dz, z, z + dz: how much the picture grows with focus.
+    pub fn start_zscale(&mut self) {
+        let dz = self.proj.scan.zscale_dz_um;
+        self.zcal = Some(calib::start_zscale(self.link.clone(), self.proj.optics().clone(), self.proj.scan.settle_ms.max(50.0), self.proj.scan.back_um, dz));
+        self.message = format!("scale vs focus: 9 frames at z -{dz}, 0, +{dz} um...");
+    }
+
+    fn poll_zcal(&mut self) {
+        let Some(j) = &self.zcal else { return };
+        let r = j.lock().unwrap().result.take();
+        let Some(r) = r else { return };
+        self.zcal = None;
+        match r {
+            Ok((a, k)) => {
+                self.proj.optics_mut().scale_per_um = a;
+                self.message = format!(
+                    "scale vs focus for {}: {:+.1} ppm per um (px/um {:.5}, {:.5}, {:.5} at -dz, 0, +dz); each frame of a scan is corrected to the scan's start",
+                    self.proj.optics().objective, a * 1e6, k[0], k[1], k[2]
+                );
+                self.changed();
+            }
+            Err(e) => self.message = format!("scale vs focus: {e}"),
+        }
+    }
+
     /// The objective's flat field off (its file stays).
     pub fn flat_off(&mut self) {
         let o = self.proj.optics_mut();
@@ -556,11 +584,13 @@ impl App {
                 Ok(f) => {
                     self.proj.optics_mut().m = f.m;
                     self.proj.optics_mut().k = f.k;
+                    self.proj.optics_mut().k3 = f.k3;
+                    self.proj.optics_mut().p = f.p;
                     self.proj.optics_mut().calib_rms_px = Some(f.rms_px);
                     self.proj.optics_mut().profile_path = None;
                     self.message = format!(
-                        "optics calibrated on {} features: {:.4} um/px, distortion k1 {:+.4} k2 {:+.4}; residual {:.2} px (without distortion {:.2} px)",
-                        f.matches, self.proj.optics().um_per_px(), f.k[0], f.k[1], f.rms_px, f.rms_plain_px
+                        "optics calibrated on {} features: {:.4} um/px, distortion k1 {:+.4} k2 {:+.4} k3 {:+.4} p1 {:+.5} p2 {:+.5}; residual {:.2} px (without distortion {:.2} px)",
+                        f.matches, self.proj.optics().um_per_px(), f.k[0], f.k[1], f.k3, f.p[0], f.p[1], f.rms_px, f.rms_plain_px
                     );
                     self.thumbs.clear();
                     self.changed();
@@ -1026,6 +1056,7 @@ impl eframe::App for App {
         self.poll_jobs();
         self.poll_calibration();
         self.poll_flat();
+        self.poll_zcal();
         self.poll_corner();
         if let Some(a) = self.link.state.lock().unwrap().alert.take() {
             self.message = a;
