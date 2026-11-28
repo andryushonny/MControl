@@ -349,18 +349,25 @@ fn selection(painter: &egui::Painter, view: &View, s: &crate::project::Selection
 /// The red lattice: lines through the crosses over the sample's selections, numbers in the squares.
 fn lattice(painter: &egui::Painter, view: &View, l: &geom::Lattice, sample: &crate::project::Sample) {
     let Some(ext) = sample.extent() else { return };
-    let cells = export::cells_in(l, &ext);
+    // only the squares the drawing has (between its crosses 1..n), none past its last cross
+    let n = sample.design.as_ref().map(|d| d.n);
+    let cells = export::cells_in_design(l, &ext, n);
     if cells.is_empty() || cells.len() > 20_000 {
         return;
     }
     let (i0, i1) = (cells.iter().map(|c| c[0]).min().unwrap(), cells.iter().map(|c| c[0]).max().unwrap() + 1);
     let (j0, j1) = (cells.iter().map(|c| c[1]).min().unwrap(), cells.iter().map(|c| c[1]).max().unwrap() + 1);
     let red = Stroke::new(1.2, Color32::from_rgb(230, 40, 40));
+    // each line only along the existing squares (the extent may hold squares on one side only)
     for i in i0..=i1 {
-        painter.line_segment([view.to_screen(l.at(i as f64, j0 as f64)), view.to_screen(l.at(i as f64, j1 as f64))], red);
+        let js: Vec<i32> = cells.iter().filter(|c| c[0] == i || c[0] == i - 1).map(|c| c[1]).collect();
+        let (Some(a), Some(b)) = (js.iter().min(), js.iter().max()) else { continue };
+        painter.line_segment([view.to_screen(l.at(i as f64, *a as f64)), view.to_screen(l.at(i as f64, (*b + 1) as f64))], red);
     }
     for j in j0..=j1 {
-        painter.line_segment([view.to_screen(l.at(i0 as f64, j as f64)), view.to_screen(l.at(i1 as f64, j as f64))], red);
+        let is: Vec<i32> = cells.iter().filter(|c| c[1] == j || c[1] == j - 1).map(|c| c[0]).collect();
+        let (Some(a), Some(b)) = (is.iter().min(), is.iter().max()) else { continue };
+        painter.line_segment([view.to_screen(l.at(*a as f64, j as f64)), view.to_screen(l.at((*b + 1) as f64, j as f64))], red);
     }
     // numbers in the top left corner of each square (as the screen shows it), once 2 crosses are marked
     let cell_px = geom::len(l.a) * view.scale;

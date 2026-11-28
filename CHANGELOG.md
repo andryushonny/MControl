@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.24
+- With a drawing chosen (30x30 or 56x56 crosses) only its squares exist: the red lattice on the map, its numbers, the exported squares, the DXF's lattice, numbers and crosses stop at crosses 1 and n. No square past the last cross (31,30 with 30x30), none before the first.
+
 ## 0.6.23
 - No dark lines where pictures meet:
   - a stitched map is grown by 2 px into the empty space around it (a map ends where its frames' pixel centres end, up to a pixel short, so two maps side by side missed each other by a fraction of a pixel);

@@ -39,6 +39,8 @@ pub struct Orient {
     pub swap: bool,
     /// in the drawing's coordinates: cross (X, Y) at (ox + (X - 1) px, oy + (Y - 1) py), x right, y up
     pub design: Option<[f64; 4]>,
+    /// the drawing's crosses: 1..=n[0] by 1..=n[1]; only the squares between them exist
+    pub n: Option<[i32; 2]>,
 }
 
 impl Orient {
@@ -48,12 +50,12 @@ impl Orient {
         let (a, b) = (v.dir_to_screen(l.a), v.dir_to_screen(l.b));
         let swap = b[0].abs() > a[0].abs();
         let (h, vert) = if swap { (b, a) } else { (a, b) };
-        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap, design: None }
+        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap, design: None, n: None }
     }
 
     /// As the lithography drawing stands: X to the right, Y up, every cross at its drawing coordinates.
     pub fn drawing(d: &crate::project::Design) -> Orient {
-        Orient { sx: 1.0, sy: -1.0, swap: false, design: Some([d.origin[0], d.origin[1], d.pitch[0], d.pitch[1]]) }
+        Orient { sx: 1.0, sy: -1.0, swap: false, design: Some([d.origin[0], d.origin[1], d.pitch[0], d.pitch[1]]), n: Some(d.n) }
     }
 
     /// (horizontal, vertical) pitch, um
@@ -83,6 +85,16 @@ impl Orient {
     }
 }
 
+/// Does the drawing have this cell (all four crosses round it)? With no drawing: every cell.
+pub fn exists(c: [i32; 2], n: Option<[i32; 2]>) -> bool {
+    n.is_none_or(|n| c[0] >= 1 && c[1] >= 1 && c[0] < n[0] && c[1] < n[1])
+}
+
+/// As `cells_in`, only the cells the drawing has.
+pub fn cells_in_design(l: &Lattice, r: &Rect, n: Option<[i32; 2]>) -> Vec<[i32; 2]> {
+    cells_in(l, r).into_iter().filter(|c| exists(*c, n)).collect()
+}
+
 /// Cells of the lattice that touch a rectangle: (i, j) = the cell between crosses (i, j) and (i+1, j+1).
 pub fn cells_in(l: &Lattice, r: &Rect) -> Vec<[i32; 2]> {
     let c = r.corners().map(|p| l.coords(p));
@@ -103,7 +115,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
     let (ph, pv) = o.pitch(l);
     let (nx, ny) = ((ph / um_per_px).round().max(1.0) as usize, (pv / um_per_px).round().max(1.0) as usize);
     let inv = src.to_stage.inverse();
-    let cells = cells_in(l, &src.rect);
+    let cells = cells_in_design(l, &src.rect, o.n);
     let mut out = vec![];
     let (bx, by) = (nx + 2 * BLEED, ny + 2 * BLEED);
     let mut rgba = vec![0u8; bx * by * 4];
@@ -273,7 +285,8 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
         d.polyline(&format!("{lay}_OUTLINE"), &corners, true);
     }
     // the lattice over everything: lines through the crosses, numbers in the squares
-    let cells = cells_in(l, extent);
+    // only what the drawing has: no square past its last cross
+    let cells = cells_in_design(l, extent, o.n);
     if let (Some(i0), Some(i1), Some(j0), Some(j1)) = (
         cells.iter().map(|c| c[0]).min(),
         cells.iter().map(|c| c[0]).max(),
