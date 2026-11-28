@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.19
+- Lattice panel, *Fit to all crosses*: every cross of the lattice looked for on the base map (where the lattice puts it, numbered by it) and the lattice fitted through all of them with the signed ones, least squares (specks taken for crosses dropped). Two signed crosses fix the lattice only near them: far away a small error in either grows (0.2 um over one pitch is 2 um ten pitches on). The message says how far the crosses were off the 2-cross lattice and what is left; much left means the map itself is not true (then Stitch again with the crosses pinned, Summary, Correct um/px). Kept while the signed crosses stay as they were; *Signed crosses only* to drop it.
+
 ## 0.6.18
 - Seams hardly seen (MStitch 0.6.1, nothing to set): frames evened out against each other before blending (brightness and tilted light, per colour), then blended over 40 px in the background. Summary: the largest correction (%).
 

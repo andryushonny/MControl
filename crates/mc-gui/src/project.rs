@@ -91,18 +91,35 @@ pub struct Sample {
     /// the lithography crosses on this sample (from its drawing): their numbers give exact drawing coordinates
     #[serde(default)]
     pub design: Option<Design>,
+    /// crosses found on the base map by "Fit to all crosses" (numbered by the lattice), used in the fit too as
+    /// long as the signed crosses are those it was done with (`auto_for`)
+    #[serde(default)]
+    pub auto_marks: Vec<(P2, [i32; 2])>,
+    #[serde(default)]
+    pub auto_for: Vec<(P2, [i32; 2])>,
     /// the view is turned by this much (degrees) so the lattice stands level on the screen
     #[serde(default)]
     pub turn_deg: f64,
 }
 
 impl Sample {
+    /// The crosses found automatically still belong to these signed crosses.
+    pub fn auto_valid(&self) -> bool {
+        let signed: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|l| (c.at, l))).collect();
+        !self.auto_marks.is_empty()
+            && signed.len() == self.auto_for.len()
+            && signed.iter().zip(&self.auto_for).all(|(a, b)| a.1 == b.1 && (a.0[0] - b.0[0]).abs() < 1e-6 && (a.0[1] - b.0[1]).abs() < 1e-6)
+    }
+
     /// Where the crosses truly are, for pinning: the lattice, at the drawing's pitch when the sample has one.
     pub fn true_lattice(&self) -> Option<Lattice> {
         let l = self.lattice.clone()?;
         Some(match &self.design {
             Some(d) => {
-                let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|k| (c.at, k))).collect();
+                let mut marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|k| (c.at, k))).collect();
+                if self.auto_valid() {
+                    marks.extend(self.auto_marks.iter().cloned());
+                }
                 l.with_pitch(&marks, d.pitch)
             }
             None => l,
@@ -110,7 +127,7 @@ impl Sample {
     }
 
     pub fn new(name: &str) -> Sample {
-        Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, lattice_sel: None, design: None, turn_deg: 0.0 }
+        Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, lattice_sel: None, design: None, auto_marks: vec![], auto_for: vec![], turn_deg: 0.0 }
     }
 
     /// The box around all selections.
@@ -120,10 +137,14 @@ impl Sample {
 
     pub fn refit(&mut self) -> Result<(), String> {
         // only crosses the operator has signed: the numbers of all the others follow from them
-        let marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|l| (c.at, l))).collect();
+        let mut marks: Vec<(P2, [i32; 2])> = self.crosses.iter().filter_map(|c| c.label.map(|l| (c.at, l))).collect();
         if marks.len() < 2 {
             self.lattice = None;
             return Ok(());
+        }
+        // the crosses found by "Fit to all crosses", while the signed ones are still those
+        if self.auto_valid() {
+            marks.extend(self.auto_marks.iter().cloned());
         }
         // the drawing's crosses are square: the lattice is too (shift, turn, one pitch; maybe mirrored)
         let fit = if self.design.is_some() { Lattice::fit_square(&marks) } else { Lattice::fit(&marks) };

@@ -485,6 +485,24 @@ pub fn right(app: &mut App, ui: &mut egui::Ui) {
         }
         if app.proj.sample().lattice.is_some() {
             ui.separator();
+            if ui.button("Fit to all crosses").on_hover_text("every cross of the lattice looked for on the base map and the lattice fitted through all of them (2 signed crosses fix it only near them; far away a small error grows)").clicked() {
+                app.fit_all_crosses();
+            }
+            if app.proj.sample().auto_valid() {
+                let l = app.proj.sample().lattice.clone();
+                let n = app.proj.sample().auto_marks.len();
+                if let Some(l) = l {
+                    ui.label(RichText::new(format!("fitted through {} more crosses, rms {:.2} um", n, l.rms_um)).monospace().size(11.0));
+                }
+                if ui.small_button("Signed crosses only").clicked() {
+                    let smp = app.proj.sample_mut();
+                    smp.auto_marks.clear();
+                    smp.auto_for.clear();
+                    let _ = smp.refit();
+                    app.changed();
+                }
+            }
+            ui.separator();
             ui.label(RichText::new("The camera does not turn: selections stay rectangles of the stage, the squares at their edges come out partial.").weak().size(11.5));
             ui.horizontal(|ui| {
                 if ui.button("Level grid").on_hover_text("turn the view (all selections together) so the lattice is horizontal and vertical").clicked() {

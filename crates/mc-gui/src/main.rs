@@ -344,6 +344,95 @@ impl App {
     }
 
     /// Align every map of the sample onto its lattice (see align.rs).
+    /// Every cross of the lattice on the base map looked for (where the lattice puts it, numbered by it), and
+    /// the lattice fitted through all found with the signed ones: two signed crosses fix it only between them,
+    /// far from them a small error in either grows; all of them, least squares, hold it everywhere. What is left
+    /// shows how true the map itself is.
+    pub fn fit_all_crosses(&mut self) {
+        let Some(l) = self.proj.sample().lattice.clone() else { return };
+        let smp = self.proj.sample().clone();
+        let Some(base) = smp.lattice_sel.and_then(|id| smp.selections.iter().find(|s| s.id == id)).or_else(|| smp.selections.iter().find(|s| s.visible && s.best_scan().and_then(|b| b.map.as_ref()).is_some())) else {
+            self.message = "no stitched map to look for crosses on".into();
+            return;
+        };
+        let Some((pic, place)) = self.map_of(base) else {
+            self.message = "the base map is not loaded yet".into();
+            return;
+        };
+        let p = l.pitch();
+        let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
+        let r_px = (radius_um / place.scale()).round().max(6.0) as usize;
+        let inv = place.inverse();
+        let c = base.rect.corners().map(|q| l.coords(q));
+        let (i0, i1) = (c.iter().map(|q| q[0]).fold(f64::MAX, f64::min).ceil() as i32, c.iter().map(|q| q[0]).fold(f64::MIN, f64::max).floor() as i32);
+        let (j0, j1) = (c.iter().map(|q| q[1]).fold(f64::MAX, f64::min).ceil() as i32, c.iter().map(|q| q[1]).fold(f64::MIN, f64::max).floor() as i32);
+        let signed: Vec<(P2, [i32; 2])> = smp.crosses.iter().filter_map(|c| c.label.map(|k| (c.at, k))).collect();
+        let mut found = vec![];
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                if signed.iter().any(|s| s.1 == [i, j]) {
+                    continue;
+                }
+                let node = l.at(i as f64, j as f64);
+                if !base.rect.contains(node) {
+                    continue;
+                }
+                let uv = inv.apply(node);
+                if let Some((u, v)) = cross::refine(pic.pyr.base(), uv[0], uv[1], r_px) {
+                    let f = place.apply([u, v]);
+                    if geom::len(geom::sub(f, node)) < radius_um {
+                        found.push((f, [i, j]));
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            self.message = "no other crosses found on the base map".into();
+            return;
+        }
+        // a speck taken for a cross: off the fit by far more than the others
+        let fit = |m: &[(P2, [i32; 2])]| if smp.design.is_some() { geom::Lattice::fit_square(m) } else { geom::Lattice::fit(m) };
+        let mut all: Vec<(P2, [i32; 2])> = signed.iter().cloned().chain(found.iter().cloned()).collect();
+        for _ in 0..2 {
+            let Ok(fl) = fit(&all) else { break };
+            let r: Vec<f64> = all.iter().map(|(p, k)| geom::len(geom::sub(*p, fl.at(k[0] as f64, k[1] as f64)))).collect();
+            let mut s = r.clone();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let lim = (4.0 * s[s.len() / 2]).max(0.5);
+            let keep: Vec<(P2, [i32; 2])> = all.iter().zip(&r).filter(|(m, e)| **e <= lim || signed.iter().any(|s| s.1 == m.1)).map(|(m, _)| *m).collect();
+            if keep.len() == all.len() {
+                break;
+            }
+            all = keep;
+        }
+        let auto: Vec<(P2, [i32; 2])> = all.iter().filter(|m| !signed.iter().any(|s| s.1 == m.1)).cloned().collect();
+        let before = {
+            // where the 2-cross lattice put them against where they are
+            let r: Vec<f64> = auto.iter().map(|(p, k)| geom::len(geom::sub(*p, l.at(k[0] as f64, k[1] as f64)))).collect();
+            (r.iter().map(|e| e * e).sum::<f64>() / r.len().max(1) as f64).sqrt()
+        };
+        let smp = self.proj.sample_mut();
+        smp.auto_marks = auto.clone();
+        smp.auto_for = signed;
+        let _ = smp.refit();
+        let after = smp.lattice.as_ref().map(|l| {
+            let r: Vec<f64> = all.iter().map(|(p, k)| geom::len(geom::sub(*p, l.at(k[0] as f64, k[1] as f64)))).collect();
+            ((r.iter().map(|e| e * e).sum::<f64>() / r.len() as f64).sqrt(), r.iter().cloned().fold(0.0, f64::max))
+        });
+        if let Some((rms, max)) = after {
+            self.message = format!(
+                "lattice through {} crosses ({} found on the map): they were {:.2} um off it (rms), now {:.2} um rms, {:.2} um the worst{}",
+                all.len(),
+                auto.len(),
+                before,
+                rms,
+                max,
+                if rms > 0.5 { ": the map itself is not true (scale, drift): Stitch again (crosses pinned), Summary, Correct um/px" } else { "" }
+            );
+        }
+        self.changed();
+    }
+
     pub fn align_all(&mut self) {
         let Some(l) = self.proj.sample().lattice.clone() else {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
@@ -923,6 +1012,9 @@ impl App {
             let smp = self.proj.sample_mut();
             for c in smp.crosses.iter_mut() {
                 c.at = [c.at[0] + d[0], c.at[1] + d[1]];
+            }
+            for m in smp.auto_marks.iter_mut().chain(smp.auto_for.iter_mut()) {
+                m.0 = [m.0[0] + d[0], m.0[1] + d[1]];
             }
             let _ = smp.refit();
         }
