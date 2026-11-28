@@ -19,6 +19,7 @@ mod picture;
 mod pixels;
 mod project;
 mod scan;
+mod summary;
 mod watch;
 
 use eframe::egui;
@@ -29,6 +30,7 @@ use project::Project;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -153,6 +155,9 @@ pub struct App {
     pub arrows_move_stage: bool,
     /// a flat field being taken
     pub flat_job: Option<Arc<Mutex<flat::Job>>>,
+    pub summary_open: bool,
+    /// the stitch shown in Summary (its map folder, relative)
+    pub summary_pick: Option<String>,
     pub settings_open: bool,
     pub frame_no: u64,
     /// arrow keys move by this part of the field
@@ -232,6 +237,8 @@ impl App {
             corner: None,
             corner_shown: false,
             arrows_move_stage: stored("arrows_move_stage").as_deref() == Some("true"),
+            summary_open: false,
+            summary_pick: None,
             settings_open: false,
             frame_no: 0,
             arrow_frac: stored("arrow_frac").and_then(|s| s.parse().ok()).unwrap_or(0.5),
@@ -361,6 +368,14 @@ impl App {
             match align::align_to(&l, &s.rect, p.pyr.base(), &now, b, rigid) {
                 Ok(a) => {
                     report.push(format!("{}: {} crosses{}, moved {:.2} um, left {:.2} um", s.name, a.crosses, if b.is_some() { " (on the base map)" } else { "" }, a.moved_um, a.rms_um));
+                    let dir = self.proj.path(&m);
+                    let mut v = summary::read(&dir);
+                    v["align"] = json!({"rms_um": a.rms_um, "crosses": a.crosses, "moved_um": a.moved_um, "onto": if b.is_some() { "base map" } else { "lattice" }});
+                    // the map moved: its crosses are measured again where it is drawn now
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("crosses");
+                    }
+                    summary::write(&dir, &v);
                     if let Some(x) = self.proj.selection_mut(s.id) {
                         x.fix = Some(match x.fix {
                             Some(f) => f.then(&a.fix),
@@ -538,6 +553,7 @@ impl App {
                 Ok(f) => {
                     self.proj.optics_mut().m = f.m;
                     self.proj.optics_mut().k = f.k;
+                    self.proj.optics_mut().calib_rms_px = Some(f.rms_px);
                     self.proj.optics_mut().profile_path = None;
                     self.message = format!(
                         "optics calibrated on {} features: {:.4} um/px, distortion k1 {:+.4} k2 {:+.4}; residual {:.2} px (without distortion {:.2} px)",
@@ -629,6 +645,28 @@ impl App {
                 _ => "scan stopped".into(),
             };
             let id = jb.selection;
+            if jb.phase == scan::Phase::Done {
+                let sel_name = self.proj.sample().selections.iter().find(|s| s.id == id).map(|s| (s.name.clone(), s.objective.clone()));
+                let (name, objective) = sel_name.unwrap_or_default();
+                let o = self.proj.objectives.iter().find(|o| o.objective == objective).cloned().unwrap_or_else(|| self.proj.optics().clone());
+                let mut v = summary::scan_part(jb.frames_dir.parent().unwrap_or(&jb.frames_dir));
+                v["selection"] = json!(name);
+                v["selection_id"] = json!(id);
+                v["sample"] = json!(self.proj.sample().name);
+                v["mode"] = json!(jb.mode.name());
+                v["objective"] = json!(objective);
+                v["when"] = json!(now_text());
+                v["frames"] = json!(jb.done);
+                v["scan_s"] = json!(jb.scan_s);
+                v["stitch_s"] = json!(jb.stitch_at.map(|t| t.elapsed().as_secs_f64()));
+                v["optics"] = json!({"um_per_px": o.um_per_px(), "k": o.k, "calib_rms_px": o.calib_rms_px, "flat": o.flat.is_some()});
+                if let Ok(d) = std::fs::read(jb.map_dir.join("metrics.json")) {
+                    if let Ok(m) = serde_json::from_slice::<serde_json::Value>(&d) {
+                        v["mstitch"] = m;
+                    }
+                }
+                summary::write(&jb.map_dir, &v);
+            }
             drop(jb);
             self.finished = Some(chrono::Local::now().format("%H:%M").to_string());
             if let Some(s) = self.proj.selection_mut(id) {
@@ -1021,6 +1059,7 @@ impl eframe::App for App {
         panels::queue(self, ui.ctx());
         panels::controls(self, ui.ctx());
         panels::keys_window(self, ui.ctx());
+        panels::summary_window(self, ui.ctx());
         panels::objective_hint(self, ui.ctx());
         if self.dirty {
             self.dirty = false;

@@ -46,6 +46,9 @@ pub fn top(app: &mut App, ui: &mut egui::Ui) {
             if ui.add_enabled(!busy_f, egui::Button::new(if busy_f { "Focusing..." } else { "Focus" })).on_hover_text("find focus here (as a scan does); by hand: . and , keys (Shift: x5)").clicked() {
                 app.focus_here();
             }
+            if ui.button("Summary").on_hover_text("how well each stitch went: its numbers, targets and their history").clicked() {
+                app.summary_open = !app.summary_open;
+            }
             if ui.button("Keys").on_hover_text("every action and its key, to change").clicked() {
                 app.keys_open = !app.keys_open;
             }
@@ -1220,4 +1223,148 @@ pub fn keys_window(app: &mut App, ctx: &egui::Context) {
 /// "Stop (Space)", or "Stop" when the action has no key.
 fn with_key(name: &str, key: String) -> String {
     if key.is_empty() { name.to_string() } else { format!("{name} ({key})") }
+}
+
+/// Summary: every stitch of the project, and for the one picked its numbers against their targets and their
+/// history (mean +- 3 sigma of earlier stitches with the same objective and mode).
+pub fn summary_window(app: &mut App, ctx: &egui::Context) {
+    use crate::summary::{self, Verdict, METRICS};
+    if !app.summary_open {
+        return;
+    }
+    // every stitch with a map, newest first: (map folder, selection id, label)
+    let mut all: Vec<(String, u32, String)> = vec![];
+    for smp in &app.proj.samples {
+        for s in &smp.selections {
+            for sc in &s.scans {
+                if let Some(m) = &sc.map {
+                    all.push((m.clone(), s.id, format!("{} / {} - {} {}", smp.name, s.name, sc.mode.name(), sc.when)));
+                }
+            }
+        }
+    }
+    all.sort_by(|a, b| b.2.split(" - ").nth(1).cmp(&a.2.split(" - ").nth(1)));
+    if app.summary_pick.as_ref().is_none_or(|p| !all.iter().any(|a| &a.0 == p)) {
+        app.summary_pick = all.first().map(|a| a.0.clone());
+    }
+    let mut open = app.summary_open;
+    egui::Window::new("Summary").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
+        if all.is_empty() {
+            ui.label("no stitched maps yet");
+            return;
+        }
+        let pick = app.summary_pick.clone().unwrap();
+        ui.horizontal(|ui| {
+            ui.label("Stitch:");
+            egui::ComboBox::from_id_salt("summary_pick").width(520.0).selected_text(all.iter().find(|a| a.0 == pick).map(|a| a.2.clone()).unwrap_or_default()).show_ui(ui, |ui| {
+                for a in &all {
+                    if ui.selectable_label(a.0 == pick, &a.2).clicked() {
+                        app.summary_pick = Some(a.0.clone());
+                    }
+                }
+            });
+            if ui.button("Export CSV").on_hover_text("every stitch's numbers into metrics.csv in the project folder").clicked() {
+                let path = app.proj.path("metrics.csv");
+                let mut out = String::from("map,selection,mode,objective,when");
+                for m in METRICS {
+                    out += &format!(",{}", m.key);
+                }
+                out.push('\n');
+                for a in &all {
+                    let v = summary::read(&app.proj.path(&a.0));
+                    let t = |k: &str| v[k].as_str().unwrap_or("").replace(',', ";");
+                    out += &format!("{},{},{},{},{}", a.0, t("selection"), t("mode"), t("objective"), t("when"));
+                    for m in METRICS {
+                        out += &format!(",{}", summary::get(&v, m.key).map(|x| format!("{x}")).unwrap_or_default());
+                    }
+                    out.push('\n');
+                }
+                app.message = match std::fs::write(&path, out) {
+                    Ok(()) => format!("metrics of {} stitches: {}", all.len(), path.display()),
+                    Err(e) => format!("metrics.csv: {e}"),
+                };
+            }
+        });
+        let dir = app.proj.path(&pick);
+        let mut v = summary::read(&dir);
+        // the crosses: measured on the map where it is drawn now, once (again after Align)
+        if v.get("crosses").is_none() {
+            if let (Some(l), Some(sel)) = (app.proj.sample().lattice.clone(), all.iter().find(|a| a.0 == pick).and_then(|a| app.proj.samples.iter().flat_map(|s| s.selections.iter()).find(|s| s.id == a.1)).cloned()) {
+                if sel.best_scan().and_then(|b| b.map.clone()).as_deref() == Some(pick.as_str()) {
+                    if let Some((pic, place)) = app.map_of(&sel) {
+                        if let Some(c) = summary::crosses(&l, &sel.rect, pic.pyr.base(), &place) {
+                            v["crosses"] = c;
+                            summary::write(&dir, &v);
+                        }
+                    }
+                }
+            }
+        }
+        let (mode, objective) = (v["mode"].as_str().unwrap_or("").to_string(), v["objective"].as_str().unwrap_or("").to_string());
+        ui.label(RichText::new(format!(
+            "{} {}, {} frames, objective {}, scan {}, stitch {}",
+            v["selection"].as_str().unwrap_or(""),
+            mode,
+            v["frames"].as_u64().unwrap_or(0),
+            objective,
+            v["scan_s"].as_f64().map(|t| mmss(t)).unwrap_or("-".into()),
+            v["stitch_s"].as_f64().map(|t| mmss(t)).unwrap_or("-".into())
+        )).size(12.0));
+        // the history: earlier stitches with the same objective and mode
+        let earlier: Vec<serde_json::Value> = all
+            .iter()
+            .filter(|a| a.0 != pick)
+            .map(|a| summary::read(&app.proj.path(&a.0)))
+            .filter(|h| h["mode"].as_str() == Some(mode.as_str()) && h["objective"].as_str() == Some(objective.as_str()))
+            .collect();
+        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Grid::new("summary").striped(true).num_columns(5).spacing([14.0, 4.0]).show(ui, |ui| {
+                for h in ["", "Value", "Target", "Usual (mean +- 3 sigma, n)", ""] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
+                for m in METRICS {
+                    let val = summary::get(&v, m.key);
+                    let hist_vals: Vec<f64> = earlier.iter().filter_map(|h| summary::get(h, m.key)).collect();
+                    let hist = summary::history(&hist_vals);
+                    ui.label(m.name).on_hover_text(m.help);
+                    let unit = if m.unit.is_empty() { String::new() } else { format!(" {}", m.unit) };
+                    let fmt = |x: f64| if x.abs() >= 100.0 { format!("{x:.0}") } else if x.abs() >= 1.0 { format!("{x:.2}") } else { format!("{x:.3}") };
+                    match val {
+                        Some(x) => {
+                            let verdict = summary::verdict(m, x, hist);
+                            let col = match verdict {
+                                Verdict::Good => Color32::from_rgb(120, 200, 140),
+                                Verdict::Unusual => Color32::from_rgb(250, 200, 80),
+                                Verdict::Bad => Color32::from_rgb(240, 90, 70),
+                                Verdict::Unknown => Color32::GRAY,
+                            };
+                            ui.label(RichText::new(format!("{}{unit}", fmt(x))).monospace().color(col));
+                        }
+                        None => {
+                            ui.label(RichText::new("-").weak());
+                        }
+                    }
+                    ui.label(match m.target {
+                        Some(t) => format!("{} {}{unit}", if m.smaller { if m.abs { "|x| <=" } else { "<=" } } else { ">=" }, fmt(t)),
+                        None => "watched".into(),
+                    });
+                    ui.label(match hist {
+                        Some((mean, s)) => format!("{} +- {}{unit} (n {})", fmt(mean), fmt(3.0 * s), hist_vals.len()),
+                        None => format!("(n {}, needs 3)", hist_vals.len()),
+                    });
+                    ui.label(match val.map(|x| summary::verdict(m, x, hist)) {
+                        Some(Verdict::Good) => RichText::new("ok").color(Color32::from_rgb(120, 200, 140)),
+                        Some(Verdict::Unusual) => RichText::new("unusual").color(Color32::from_rgb(250, 200, 80)),
+                        Some(Verdict::Bad) => RichText::new("out of target").color(Color32::from_rgb(240, 90, 70)),
+                        _ => RichText::new(""),
+                    });
+                    ui.end_row();
+                }
+            });
+        });
+        ui.label(RichText::new("Green: within the target. Yellow: within it, but out of this setup's usual range (mean +- 3 sigma of earlier stitches with the same objective and mode). Red: out of the target. Crosses: needs the lattice (2 signed crosses) and the map loaded; measured where the map is drawn now.").weak().size(11.0));
+    });
+    app.summary_open = open;
 }

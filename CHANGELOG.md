@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.14
+- *Summary* (top bar): every stitch of the project and, for the one picked, its numbers against their targets and their history (mean +- 3 sigma of earlier stitches with the same objective and mode): green within the target, yellow within it but out of the usual range, red out of the target. Crosses around the lattice (rms, max), scale (ppm) and skew (mrad) against it, what Align left, the pairs after the solve, overlap likeness, frames to reshoot, objects whole / cut, the brightness step over overlaps, the background left after the flat field, the stage's landing, blurred frames, the z spread, the surface's tilt, curvature and roughness, the optics calibration left. Kept as summary.json next to each map; *Export CSV* writes metrics.csv. Needs MStitch 0.5.2 for its part.
+
 ## 0.6.13
 - The base selection: the one the lattice's crosses were marked on (shown *base*; *Make base* to choose another). The lattice moves with its map (*Move map*: arrows 1 map px, Shift 10), and *Align* brings every other map onto the base map cross to cross: each lattice cross in both selections found on both maps, this map moved so its crosses lie on the base's (shift and turn; scale too only for another objective). Without a base map in common, onto the lattice as before, now also without scale. A map is no longer stretched to a lattice marked by hand.
 - Crosses marked on a map that was moved (by hand or Align) are found where the map is drawn now (before: where it was stitched).

@@ -96,6 +96,11 @@ pub fn align_to(l: &Lattice, rect: &Rect, map: &Rgb, to_stage: &Affine, base: Op
     Ok(Aligned { fix, crosses: pairs.len(), rms_um: rms, moved_um: geom::len(geom::sub(fix.apply(c), c)) })
 }
 
+/// The least-squares similarity (shift, turn, scale) taking the first points onto the second.
+pub fn similarity_pub(ps: &[(P2, P2)]) -> Affine {
+    similarity(ps)
+}
+
 /// Shift and turn (no scale) taking the first points onto the second, least squares.
 fn rigid_fit(ps: &[(P2, P2)]) -> Affine {
     let s = similarity(ps);

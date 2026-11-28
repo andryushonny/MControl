@@ -77,6 +77,9 @@ pub struct Optics {
     pub flat_file: Option<String>,
     #[serde(skip)]
     pub flat: Option<std::sync::Arc<crate::flat::Flat>>,
+    /// what the distortion calibration left (px), when this objective was calibrated
+    #[serde(default)]
+    pub calib_rms_px: Option<f64>,
     /// how hard the flat field corrects: 1 as measured
     #[serde(default = "one")]
     pub flat_strength: f64,
@@ -84,7 +87,7 @@ pub struct Optics {
 
 impl Optics {
     pub fn guess(objective: &str, um_per_px: f64, frame: [u32; 2]) -> Optics {
-        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0 }
+        Optics { objective: objective.into(), m: [1.0 / um_per_px, 0.0, 0.0, 1.0 / um_per_px], frame, profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None }
     }
 
     /// From an MStitch profile json ({"objective", "m", "frame", ...}).
@@ -105,6 +108,7 @@ impl Optics {
             flat_file: None,
             flat: None,
             flat_strength: 1.0,
+            calib_rms_px: None,
             k: v["k"].as_array().map(|a| [a.first().and_then(|x| x.as_f64()).unwrap_or(0.0), a.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]).unwrap_or([0.0, 0.0]),
         })
     }
@@ -381,7 +385,7 @@ mod tests {
 
     #[test]
     fn optics_round_trip() {
-        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0 };
+        let o = Optics { objective: "x".into(), m: [0.5, 0.1, -0.1, 0.5], frame: [100, 80], profile_path: None, k: [0.0, 0.0], camera: None, flat_file: None, flat: None, flat_strength: 1.0, calib_rms_px: None };
         let p = o.pixel_to_stage([3.0, 4.0], 50.0, 40.0);
         assert!((p[0] - 3.0).abs() < 1e-12 && (p[1] - 4.0).abs() < 1e-12);
         let af = Affine([2.0, 1.0, 5.0, -1.0, 3.0, 7.0]);
