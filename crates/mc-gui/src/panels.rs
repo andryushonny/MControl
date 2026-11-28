@@ -741,6 +741,12 @@ pub fn settings(app: &mut App, ctx: &egui::Context) {
                 changed |= ui.add(egui::Slider::new(&mut app.proj.scan.overlap_quality, 0.05..=0.6)).changed();
             });
             ui.end_row();
+            ui.label("Export overlap, um");
+            ui.horizontal(|ui| {
+                changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.export_pad_um).range(0.0..=200.0).speed(0.5)).changed();
+                ui.label(RichText::new("each exported square's picture reaches this far past its crosses: the crosses whole in every picture, neighbours overlap (the same map), so in AutoCAD each can be checked and moved by hand. 0: edge to edge").weak().size(11.0));
+            });
+            ui.end_row();
             ui.label("Quality rounds");
             ui.horizontal(|ui| {
                 changed |= ui.add(egui::DragValue::new(&mut app.proj.scan.quality_rounds).range(1..=9)).changed();

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.25
+- Export with overlap (Settings, *Export overlap, um*, default 20): each square's picture reaches that far past its four crosses on every side, so every cross is whole in each of the four pictures round it and neighbours overlap (the same map there, the same warp). In AutoCAD a picture can be checked against its neighbours and moved by hand. 0: edge to edge as before.
+
 ## 0.6.24
 - With a drawing chosen (30x30 or 56x56 crosses) only its squares exist: the red lattice on the map, its numbers, the exported squares, the DXF's lattice, numbers and crosses stop at crosses 1 and n. No square past the last cross (31,30 with 30x30), none before the first.
 

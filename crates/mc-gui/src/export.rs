@@ -22,8 +22,9 @@ pub struct Source<'a> {
 pub struct Square {
     pub cell: [i32; 2],
     pub file: PathBuf,
-    /// pixels of the cell itself; the PNG has `BLEED` more on every side
+    /// pixels of the cell itself; the PNG has `pad` more on every side
     pub px: [usize; 2],
+    pub pad: usize,
 }
 
 /// Pixels each cell's picture reaches over its neighbours' on every side (the same map there): a CAD viewer
@@ -41,6 +42,9 @@ pub struct Orient {
     pub design: Option<[f64; 4]>,
     /// the drawing's crosses: 1..=n[0] by 1..=n[1]; only the squares between them exist
     pub n: Option<[i32; 2]>,
+    /// how far each square's picture reaches past its crosses on every side (um): the crosses whole in every
+    /// picture, neighbours overlapping (the same map there), so a picture can be checked and moved by hand
+    pub pad_um: f64,
 }
 
 impl Orient {
@@ -50,12 +54,12 @@ impl Orient {
         let (a, b) = (v.dir_to_screen(l.a), v.dir_to_screen(l.b));
         let swap = b[0].abs() > a[0].abs();
         let (h, vert) = if swap { (b, a) } else { (a, b) };
-        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap, design: None, n: None }
+        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap, design: None, n: None, pad_um: 0.0 }
     }
 
     /// As the lithography drawing stands: X to the right, Y up, every cross at its drawing coordinates.
     pub fn drawing(d: &crate::project::Design) -> Orient {
-        Orient { sx: 1.0, sy: -1.0, swap: false, design: Some([d.origin[0], d.origin[1], d.pitch[0], d.pitch[1]]), n: Some(d.n) }
+        Orient { sx: 1.0, sy: -1.0, swap: false, design: Some([d.origin[0], d.origin[1], d.pitch[0], d.pitch[1]]), n: Some(d.n), pad_um: 0.0 }
     }
 
     /// (horizontal, vertical) pitch, um
@@ -117,7 +121,9 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
     let inv = src.to_stage.inverse();
     let cells = cells_in_design(l, &src.rect, o.n);
     let mut out = vec![];
-    let (bx, by) = (nx + 2 * BLEED, ny + 2 * BLEED);
+    // at least BLEED; more as asked (crosses whole in every picture)
+    let pad = BLEED.max((o.pad_um.max(0.0) / um_per_px).round() as usize);
+    let (bx, by) = (nx + 2 * pad, ny + 2 * pad);
     let mut rgba = vec![0u8; bx * by * 4];
     // every cell between its four crosses as they really are on the map: a cross found near its lattice place
     // is where the square's corner goes, so in the drawing each cross lands exactly on its place (a corner not
@@ -199,8 +205,8 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
         for q in 0..by {
             for pp in 0..bx {
                 // the square in screen order: p to the right, q down (the bleed beyond the cell: the same warp)
-                let fx = (pp as f64 - BLEED as f64 + 0.5) / nx as f64;
-                let fy = (q as f64 - BLEED as f64 + 0.5) / ny as f64;
+                let fx = (pp as f64 - pad as f64 + 0.5) / nx as f64;
+                let fy = (q as f64 - pad as f64 + 0.5) / ny as f64;
                 let (fi, fj) = o.lat(fx, fy);
                 let s = at(fi, fj);
                 let px = if src.rect.contains(s) {
@@ -212,7 +218,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
                 let o4 = (q * bx + pp) * 4;
                 match px {
                     Some(c) => {
-                        let inside = (BLEED..BLEED + nx).contains(&pp) && (BLEED..BLEED + ny).contains(&q);
+                        let inside = (pad..pad + nx).contains(&pp) && (pad..pad + ny).contains(&q);
                         filled += inside as usize;
                         rgba[o4..o4 + 4].copy_from_slice(&[c[0], c[1], c[2], (src.opacity.clamp(0.0, 1.0) * 255.0).round().max(1.0) as u8]);
                     }
@@ -226,7 +232,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
         let name = o.top_left(*cell);
         let file = dir.join(format!("{}_{}.png", name[0], name[1]));
         pixels::write_png_rgba(&file, bx, by, &rgba)?;
-        out.push(Square { cell: *cell, file, px: [nx, ny] });
+        out.push(Square { cell: *cell, file, px: [nx, ny], pad });
     }
     Ok(out)
 }
@@ -274,8 +280,8 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
             let x0 = c.iter().map(|q| q[0]).fold(f64::MAX, f64::min);
             let y0 = c.iter().map(|q| q[1]).fold(f64::MAX, f64::min);
             let (du, dv) = (ph / sq.px[0] as f64, pv / sq.px[1] as f64);
-            let b = BLEED as f64;
-            d.image(&lay, &rel, [sq.px[0] + 2 * BLEED, sq.px[1] + 2 * BLEED], [x0 - b * du, y0 - b * dv], du, dv);
+            let b = sq.pad as f64;
+            d.image(&lay, &rel, [sq.px[0] + 2 * sq.pad, sq.px[1] + 2 * sq.pad], [x0 - b * du, y0 - b * dv], du, dv);
         }
         // the selection's outline, in lattice place
         let corners: Vec<P2> = rect.corners().iter().map(|q| {
@@ -445,8 +451,8 @@ mod tests {
         assert!(!full.is_empty());
         for s in full {
             let img = pixels::read_png(&s.file).unwrap();
-            assert_eq!((img.w, img.h), (s.px[0] + 2 * BLEED, s.px[1] + 2 * BLEED));
-            let px = |x: usize, y: usize| img.get(x + BLEED, y + BLEED)[0] as i32;
+            assert_eq!((img.w, img.h), (s.px[0] + 2 * s.pad, s.px[1] + 2 * s.pad));
+            let px = |x: usize, y: usize| img.get(x + s.pad, y + s.pad)[0] as i32;
             let (n0, n1) = (s.px[0] - 1, s.px[1] - 1);
             // each corner on its cross: the corner dark, and both arms run along the square's edges from it
             // (8 px = 4 um in: an arm is 3 um wide, so a corner 1.5 um off its cross already misses one)

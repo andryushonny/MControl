@@ -1306,6 +1306,8 @@ impl App {
             Some(d) => export::Orient::drawing(d),
             None => export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, self.view_turn()),
         };
+        let mut orient = orient;
+        orient.pad_um = self.proj.scan.export_pad_um;
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];

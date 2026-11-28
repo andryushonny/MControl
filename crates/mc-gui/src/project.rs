@@ -210,6 +210,9 @@ pub struct ScanSettings {
     /// rounds of a quality scan (each scanned and stitched anew, the best kept by vote); quick: always 1
     #[serde(default = "quality_rounds")]
     pub quality_rounds: usize,
+    /// export: each square's picture reaches this far past its crosses (um), crosses whole, neighbours overlap
+    #[serde(default = "export_pad")]
+    pub export_pad_um: f64,
     /// blurred: less sharp than this part of the last sharp frames
     #[serde(default = "focus_drop")]
     pub focus_drop: f64,
@@ -237,7 +240,7 @@ fn focus_max() -> f64 {
 
 impl Default for ScanSettings {
     fn default() -> Self {
-        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), zscale_dz_um: zscale_dz(), quality_rounds: quality_rounds(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
+        ScanSettings { overlap_quick: 0.25, overlap_quality: 0.35, settle_ms: 30.0, back_um: 20.0, mstitch: "python -m mstitch".into(), autofocus: true, focus_window_um: focus_window(), zscale_dz_um: zscale_dz(), quality_rounds: quality_rounds(), export_pad_um: export_pad(), focus_drop: 0.5, focus_max_um: 100.0, z_step_um: 5.0 }
     }
 }
 
@@ -423,6 +426,9 @@ fn zscale_dz() -> f64 {
     5.0
 }
 
+fn export_pad() -> f64 {
+    20.0
+}
 fn quality_rounds() -> usize {
     3
 }
