@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.23
+- No dark lines where pictures meet:
+  - a stitched map is grown by 2 px into the empty space around it (a map ends where its frames' pixel centres end, up to a pixel short, so two maps side by side missed each other by a fraction of a pixel);
+  - the zoomed-out levels average only real pixels (black "no picture" was averaged into the edge pixels);
+  - in the DXF each cell's picture reaches 2 px over its neighbours (the same map there, the same warp), so a CAD viewer no longer leaves a hairline where two cell edges meet on a fraction of a screen pixel.
+
 ## 0.6.22
 - Quality scans in rounds (Settings, *Quality rounds*, default 3; quick: always 1). Each round is scanned and stitched anew, and they really differ: round 1 as usual; round 2 column by column, 5 % more overlap, the frames' grid shifted so the objects the earlier rounds found (MStitch's objects.csv, 0.6.4+) sit whole and near the middle of a frame; round 3 from the far corner back, 10 % more overlap, shifted elsewhere; further rounds go round these. A shift is never within a fifth of a pitch of one used before; the overlap comes back down if a round would go over the frame limit.
 - When all rounds are done they are voted on by every Summary number with a target: each ranks the rounds, the ranks are averaged (crosses' and pairs' numbers count double), the lowest wins and becomes the selection's map. Summary shows round k/N and (chosen). Every round's settings (overlap, shift, order), its numbers and the vote are appended to rounds.csv in the project, for finding the best settings later.

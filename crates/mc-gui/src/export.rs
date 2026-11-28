@@ -22,8 +22,13 @@ pub struct Source<'a> {
 pub struct Square {
     pub cell: [i32; 2],
     pub file: PathBuf,
+    /// pixels of the cell itself; the PNG has `BLEED` more on every side
     pub px: [usize; 2],
 }
+
+/// Pixels each cell's picture reaches over its neighbours' on every side (the same map there): a CAD viewer
+/// draws each picture's edge on a fraction of a screen pixel, and two edges meeting exactly leave a dark hairline.
+pub const BLEED: usize = 2;
 
 /// How the lattice stands on the screen, so the drawing looks like the screen: which lattice axis is the
 /// horizontal one (`swap`: the second, b), and whether it runs right (sx = +1) and the other down (sy = +1).
@@ -100,7 +105,8 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
     let inv = src.to_stage.inverse();
     let cells = cells_in(l, &src.rect);
     let mut out = vec![];
-    let mut rgba = vec![0u8; nx * ny * 4];
+    let (bx, by) = (nx + 2 * BLEED, ny + 2 * BLEED);
+    let mut rgba = vec![0u8; bx * by * 4];
     // every cell between its four crosses as they really are on the map: a cross found near its lattice place
     // is where the square's corner goes, so in the drawing each cross lands exactly on its place (a corner not
     // found: its lattice place, moved as the found ones are)
@@ -178,11 +184,11 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
             lerp(lerp(pin[0], pin[1], fi), lerp(pin[2], pin[3], fi), fj)
         };
         let mut filled = 0usize;
-        for q in 0..ny {
-            for pp in 0..nx {
-                // the square in screen order: p to the right, q down
-                let fx = (pp as f64 + 0.5) / nx as f64;
-                let fy = (q as f64 + 0.5) / ny as f64;
+        for q in 0..by {
+            for pp in 0..bx {
+                // the square in screen order: p to the right, q down (the bleed beyond the cell: the same warp)
+                let fx = (pp as f64 - BLEED as f64 + 0.5) / nx as f64;
+                let fy = (q as f64 - BLEED as f64 + 0.5) / ny as f64;
                 let (fi, fj) = o.lat(fx, fy);
                 let s = at(fi, fj);
                 let px = if src.rect.contains(s) {
@@ -191,11 +197,12 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
                 } else {
                     None
                 };
-                let o4 = (q * nx + pp) * 4;
+                let o4 = (q * bx + pp) * 4;
                 match px {
                     Some(c) => {
+                        let inside = (BLEED..BLEED + nx).contains(&pp) && (BLEED..BLEED + ny).contains(&q);
+                        filled += inside as usize;
                         rgba[o4..o4 + 4].copy_from_slice(&[c[0], c[1], c[2], (src.opacity.clamp(0.0, 1.0) * 255.0).round().max(1.0) as u8]);
-                        filled += 1;
                     }
                     None => rgba[o4..o4 + 4].copy_from_slice(&[0, 0, 0, 0]),
                 }
@@ -206,7 +213,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
         }
         let name = o.top_left(*cell);
         let file = dir.join(format!("{}_{}.png", name[0], name[1]));
-        pixels::write_png_rgba(&file, nx, ny, &rgba)?;
+        pixels::write_png_rgba(&file, bx, by, &rgba)?;
         out.push(Square { cell: *cell, file, px: [nx, ny] });
     }
     Ok(out)
@@ -254,7 +261,9 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
             let c = [cad(l, o, i, j), cad(l, o, i + 1.0, j), cad(l, o, i, j + 1.0), cad(l, o, i + 1.0, j + 1.0)];
             let x0 = c.iter().map(|q| q[0]).fold(f64::MAX, f64::min);
             let y0 = c.iter().map(|q| q[1]).fold(f64::MAX, f64::min);
-            d.image(&lay, &rel, sq.px, [x0, y0], ph / sq.px[0] as f64, pv / sq.px[1] as f64);
+            let (du, dv) = (ph / sq.px[0] as f64, pv / sq.px[1] as f64);
+            let b = BLEED as f64;
+            d.image(&lay, &rel, [sq.px[0] + 2 * BLEED, sq.px[1] + 2 * BLEED], [x0 - b * du, y0 - b * dv], du, dv);
         }
         // the selection's outline, in lattice place
         let corners: Vec<P2> = rect.corners().iter().map(|q| {
@@ -351,12 +360,12 @@ mod tests {
         assert!(!sq.is_empty());
         for s in &sq {
             let img = crate::pixels::read_png(&s.file).unwrap();
-            assert_eq!([img.w, img.h], [100, 100]);
+            assert_eq!([img.w, img.h], [100 + 2 * BLEED, 100 + 2 * BLEED]);
             let want = colour(s.cell[0], s.cell[1]);
             // every pixel with picture, one pixel away from the cell's edges, has the cell's colour
             for y in 1..99 {
                 for x in 1..99 {
-                    let p = img.get(x, y);
+                    let p = img.get(x + BLEED, y + BLEED);
                     if p != [0, 0, 0] {
                         assert_eq!(p, want, "cell {:?} at {x},{y}", s.cell);
                     }
@@ -423,7 +432,8 @@ mod tests {
         assert!(!full.is_empty());
         for s in full {
             let img = pixels::read_png(&s.file).unwrap();
-            let px = |x: usize, y: usize| img.get(x, y)[0] as i32;
+            assert_eq!((img.w, img.h), (s.px[0] + 2 * BLEED, s.px[1] + 2 * BLEED));
+            let px = |x: usize, y: usize| img.get(x + BLEED, y + BLEED)[0] as i32;
             let (n0, n1) = (s.px[0] - 1, s.px[1] - 1);
             // each corner on its cross: the corner dark, and both arms run along the square's edges from it
             // (8 px = 4 um in: an arm is 3 um wide, so a corner 1.5 um off its cross already misses one)

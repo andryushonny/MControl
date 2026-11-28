@@ -28,19 +28,61 @@ impl Rgb {
         let mut o = Rgb::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                for c in 0..3 {
-                    let s: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                        .iter()
-                        .map(|(dx, dy)| {
-                            let (xx, yy) = ((2 * x + dx).min(self.w - 1), (2 * y + dy).min(self.h - 1));
-                            self.px[(yy * self.w + xx) * 3 + c] as u32
-                        })
-                        .sum();
-                    o.px[(y * w + x) * 3 + c] = (s / 4) as u8;
+                // black is "no picture": averaged only over the pixels that have one (else a picture's edge
+                // turns into a dark line in the zoomed-out levels)
+                let (mut s, mut n) = ([0u32; 3], 0u32);
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (xx, yy) = ((2 * x + dx).min(self.w - 1), (2 * y + dy).min(self.h - 1));
+                    let i = (yy * self.w + xx) * 3;
+                    let p = &self.px[i..i + 3];
+                    if p != [0, 0, 0] {
+                        for c in 0..3 {
+                            s[c] += p[c] as u32;
+                        }
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    let v = s.map(|q| ((q + n / 2) / n) as u8);
+                    o.px[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(if v == [0, 0, 0] { &[1, 1, 1] } else { &v });
                 }
             }
         }
         o
+    }
+
+    /// The picture grown by `n` pixels into the "no picture" (black) around it: each such pixel next to the
+    /// picture takes its neighbours' average. Covers the fraction of a pixel by which two pictures placed side by
+    /// side may miss each other (a map ends where its frames' pixel centres end, up to a pixel short).
+    pub fn bleed(&mut self, n: usize) {
+        let (w, h) = (self.w, self.h);
+        for _ in 0..n {
+            let src = self.px.clone();
+            let has = |x: usize, y: usize| src[(y * w + x) * 3..(y * w + x) * 3 + 3] != [0, 0, 0];
+            for y in 0..h {
+                for x in 0..w {
+                    if has(x, y) {
+                        continue;
+                    }
+                    let (mut s, mut k) = ([0u32; 3], 0u32);
+                    for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                        let (xx, yy) = (x as i64 + dx, y as i64 + dy);
+                        if xx < 0 || yy < 0 || xx >= w as i64 || yy >= h as i64 || !has(xx as usize, yy as usize) {
+                            continue;
+                        }
+                        let i = (yy as usize * w + xx as usize) * 3;
+                        for c in 0..3 {
+                            s[c] += src[i + c] as u32;
+                        }
+                        k += 1;
+                    }
+                    if k > 0 {
+                        let v = s.map(|q| ((q + k / 2) / k).max(1) as u8);
+                        self.px[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&v);
+                    }
+                }
+            }
+        }
     }
 
     /// Bilinear sample at (u, v) in pixel units (pixel centres at +0.5). None outside, or on "no data" (black).

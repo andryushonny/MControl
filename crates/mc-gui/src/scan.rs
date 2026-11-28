@@ -429,6 +429,9 @@ pub fn load_map(dir: &Path) -> Result<(Rgb, Affine, f64), String> {
             img.px[((y0 + y) * w + x0) * 3..((y0 + y) * w + x0) * 3 + n].copy_from_slice(src);
         }
     }
+    // grown by 2 px where no frame reached: next to another map (or along this one's ragged edge) no gap of a
+    // fraction of a pixel shows as a dark line
+    img.bleed(2);
     let umpp = m["um_per_px"].as_f64().unwrap_or(to_stage.scale());
     Ok((img, to_stage, umpp))
 }
