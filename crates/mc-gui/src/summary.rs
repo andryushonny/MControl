@@ -28,7 +28,7 @@ pub struct Metric {
 pub const METRICS: &[Metric] = &[
     Metric { key: "crosses.rms_um", name: "Crosses around the lattice, rms", unit: "um", target: Some(0.2), smaller: true, abs: false, help: "the crosses found on the map against the lattice, after the best shift, turn and scale: the map's own shape error (the main number for lithography)" },
     Metric { key: "crosses.max_um", name: "Crosses around the lattice, max", unit: "um", target: Some(0.5), smaller: true, abs: false, help: "the worst cross" },
-    Metric { key: "crosses.scale_ppm", name: "Scale against the lattice", unit: "ppm", target: Some(50.0), smaller: true, abs: true, help: "how much the map is larger (+) or smaller than the lattice; with the drawing's pitch: against the design" },
+    Metric { key: "crosses.scale_ppm", name: "Scale against the drawing", unit: "ppm", target: Some(50.0), smaller: true, abs: true, help: "how much the map's cross pitch is larger (+) or smaller than the drawing's (without a drawing chosen: than the lattice marked by hand)" },
     Metric { key: "crosses.skew_mrad", name: "Skew against the lattice", unit: "mrad", target: Some(0.1), smaller: true, abs: true, help: "the lattice's axes on the map, how far from the lattice's angle" },
     Metric { key: "align.rms_um", name: "Left after Align", unit: "um", target: Some(0.1), smaller: true, abs: false, help: "between this map's crosses and the base map's (or the lattice) after Align" },
     Metric { key: "mstitch.pair_rms_px", name: "Pairs after the solve, rms", unit: "px", target: Some(0.2), smaller: true, abs: false, help: "how far overlapping frames stay from their measured offset once all are placed (full-resolution px)" },
@@ -163,7 +163,7 @@ fn lsq(pts: &[(f64, f64, f64)], k: usize) -> Option<Vec<f64>> {
 
 /// The crosses on a map against the lattice: every node inside the selection looked for on the map (where it is
 /// drawn now), the best similarity taken out; what is left, and the similarity's scale and the affine's skew.
-pub fn crosses(l: &Lattice, rect: &Rect, map: &Rgb, place: &Affine) -> Option<Value> {
+pub fn crosses(l: &Lattice, rect: &Rect, map: &Rgb, place: &Affine, design_pitch: Option<P2>) -> Option<Value> {
     let p = l.pitch();
     let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
     let r_px = (radius_um / place.scale()).round().max(6.0) as usize;
@@ -216,7 +216,12 @@ pub fn crosses(l: &Lattice, rect: &Rect, map: &Rgb, place: &Affine) -> Option<Va
     let b_map = [(sxj * sii - sxi * sij) / det, (syj * sii - syi * sij) / det];
     let ang = |v: P2| v[1].atan2(v[0]);
     let skew = ((ang(b_map) - ang(a_map)) - (ang(l.b) - ang(l.a))).sin() * 1000.0;
-    let scale = ((geom::len(a_map) / geom::len(l.a) + geom::len(b_map) / geom::len(l.b)) / 2.0 - 1.0) * 1e6;
+    // against the drawing's pitch when the sample has one, else against the lattice marked by hand
+    let (pa, pb) = match design_pitch {
+        Some(p) => (p[0], p[1]),
+        None => (geom::len(l.a), geom::len(l.b)),
+    };
+    let scale = ((geom::len(a_map) / pa + geom::len(b_map) / pb) / 2.0 - 1.0) * 1e6;
     // scatter after the best similarity (the map may sit anywhere, turned a little)
     let sim = crate::align::similarity_pub(&pairs.iter().map(|p| (p.0, p.1)).collect::<Vec<_>>());
     let r: Vec<f64> = pairs.iter().map(|p| geom::len(geom::sub(sim.apply(p.0), p.1))).collect();

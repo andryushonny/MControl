@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.15
+- The sample's lithography crosses, chosen once per sample (Lattice panel, *Crosses*): *Optical 30 x 30, 200 um* (opt_7x7_with_el_lit_1) or *E-beam 56 x 56, 90 um* (el_lit_mark); cross (X, Y) at its drawing coordinates. Changing it after crosses are signed asks twice. Numbers outside the drawing are shown in red; the pitch the stage sees against the drawing's (ppm).
+- With a drawing the lattice is square (one pitch, right angle; 3+ crosses: least squares, mirrored or not).
+- Export with a drawing: in the drawing's own coordinates (X right, Y up, cross (X, Y) at its place), with a DRAWING_CROSSES layer to check the overlay on the lithography drawing.
+- Export: every square is cut between its four crosses as they really are on the map (each found near its lattice place; a corner not found follows the found ones), so in the drawing each cross lands exactly on its place, whatever is left of scale, skew or drift in the map.
+- Summary: scale against the drawing's pitch when the sample has one.
+
 ## 0.6.14
 - *Summary* (top bar): every stitch of the project and, for the one picked, its numbers against their targets and their history (mean +- 3 sigma of earlier stitches with the same objective and mode): green within the target, yellow within it but out of the usual range, red out of the target. Crosses around the lattice (rms, max), scale (ppm) and skew (mrad) against it, what Align left, the pairs after the solve, overlap likeness, frames to reshoot, objects whole / cut, the brightness step over overlaps, the background left after the flat field, the stage's landing, blurred frames, the z spread, the surface's tilt, curvature and roughness, the optics calibration left. Kept as summary.json next to each map; *Export CSV* writes metrics.csv. Needs MStitch 0.5.2 for its part.
 

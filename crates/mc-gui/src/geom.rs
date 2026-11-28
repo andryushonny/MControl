@@ -347,6 +347,62 @@ impl Lattice {
     }
 }
 
+impl Lattice {
+    /// A square lattice (equal pitch along a and b, b at a right angle to a) through the crosses: for a
+    /// drawing's crosses, which are square. 2 crosses: as `fit`; 3 or more: least squares, b turned either way
+    /// from a (the stage may be mirrored against the drawing), the better one.
+    pub fn fit_square(marks: &[(P2, [i32; 2])]) -> Result<Lattice, String> {
+        if marks.len() < 3 {
+            return Lattice::fit(marks);
+        }
+        let mut best: Option<Lattice> = None;
+        for s in [1.0, -1.0] {
+            // p = o + i a + j s R90 a, R90 a = (-a_y, a_x); unknowns o_x, o_y, a_x, a_y
+            let mut m = [[0.0f64; 5]; 4];
+            for (p, k) in marks {
+                let (i, j) = (k[0] as f64, k[1] as f64);
+                for (row, rhs) in [([1.0, 0.0, i, -s * j], p[0]), ([0.0, 1.0, s * j, i], p[1])] {
+                    for u in 0..4 {
+                        for v in 0..4 {
+                            m[u][v] += row[u] * row[v];
+                        }
+                        m[u][4] += row[u] * rhs;
+                    }
+                }
+            }
+            let Some(x) = solve_n(m) else { continue };
+            let a = [x[2], x[3]];
+            let b = [-s * a[1], s * a[0]];
+            let l = Lattice { origin: [x[0], x[1]], a, b, rms_um: 0.0 };
+            let rms = (marks.iter().map(|(p, k)| len(sub(*p, l.at(k[0] as f64, k[1] as f64))).powi(2)).sum::<f64>() / marks.len() as f64).sqrt();
+            if best.as_ref().is_none_or(|b| rms < b.rms_um) {
+                best = Some(Lattice { rms_um: rms, ..l });
+            }
+        }
+        best.ok_or_else(|| "the crosses must not lie on one line".into())
+    }
+}
+
+/// Gaussian elimination on an augmented 4 x 5 system.
+fn solve_n(mut a: [[f64; 5]; 4]) -> Option<[f64; 4]> {
+    for col in 0..4 {
+        let piv = (col..4).max_by(|&i, &j| a[i][col].abs().partial_cmp(&a[j][col].abs()).unwrap())?;
+        if a[piv][col].abs() < 1e-12 {
+            return None;
+        }
+        a.swap(col, piv);
+        for r in 0..4 {
+            if r != col {
+                let f = a[r][col] / a[col][col];
+                for c in col..5 {
+                    a[r][c] -= f * a[col][c];
+                }
+            }
+        }
+    }
+    Some([a[0][4] / a[0][0], a[1][4] / a[1][1], a[2][4] / a[2][2], a[3][4] / a[3][3]])
+}
+
 fn solve3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
     let det = |m: &[[f64; 3]; 3]| {
         m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])

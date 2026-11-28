@@ -32,6 +32,8 @@ pub struct Orient {
     pub sx: f64,
     pub sy: f64,
     pub swap: bool,
+    /// in the drawing's coordinates: cross (X, Y) at (ox + (X - 1) px, oy + (Y - 1) py), x right, y up
+    pub design: Option<[f64; 4]>,
 }
 
 impl Orient {
@@ -41,11 +43,19 @@ impl Orient {
         let (a, b) = (v.dir_to_screen(l.a), v.dir_to_screen(l.b));
         let swap = b[0].abs() > a[0].abs();
         let (h, vert) = if swap { (b, a) } else { (a, b) };
-        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap }
+        Orient { sx: if h[0] >= 0.0 { 1.0 } else { -1.0 }, sy: if vert[1] >= 0.0 { 1.0 } else { -1.0 }, swap, design: None }
+    }
+
+    /// As the lithography drawing stands: X to the right, Y up, every cross at its drawing coordinates.
+    pub fn drawing(d: &crate::project::Design) -> Orient {
+        Orient { sx: 1.0, sy: -1.0, swap: false, design: Some([d.origin[0], d.origin[1], d.pitch[0], d.pitch[1]]) }
     }
 
     /// (horizontal, vertical) pitch, um
     pub fn pitch(&self, l: &Lattice) -> (f64, f64) {
+        if let Some(d) = self.design {
+            return (d[2], d[3]);
+        }
         let p = l.pitch();
         if self.swap { (p[1], p[0]) } else { (p[0], p[1]) }
     }
@@ -91,8 +101,43 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
     let cells = cells_in(l, &src.rect);
     let mut out = vec![];
     let mut rgba = vec![0u8; nx * ny * 4];
+    // every cell between its four crosses as they really are on the map: a cross found near its lattice place
+    // is where the square's corner goes, so in the drawing each cross lands exactly on its place (a corner not
+    // found: its lattice place, moved as the found ones are)
+    let p = l.pitch();
+    let radius_um = (0.3 * p[0].min(p[1])).min(25.0);
+    let r_px = (radius_um / src.to_stage.scale()).round().max(6.0) as usize;
+    let mut found: std::collections::HashMap<[i32; 2], Option<P2>> = std::collections::HashMap::new();
+    let mut corner = |c: [i32; 2]| -> Option<P2> {
+        *found.entry(c).or_insert_with(|| {
+            let node = l.at(c[0] as f64, c[1] as f64);
+            if !src.rect.contains(node) {
+                return None;
+            }
+            let uv = inv.apply(node);
+            let (u, v) = crate::cross::refine(src.map, uv[0], uv[1], r_px)?;
+            let f = src.to_stage.apply([u, v]);
+            (crate::geom::len(crate::geom::sub(f, node)) < radius_um).then_some(f)
+        })
+    };
     for (k, cell) in cells.iter().enumerate() {
         progress(k, cells.len());
+        let ids = [[cell[0], cell[1]], [cell[0] + 1, cell[1]], [cell[0], cell[1] + 1], [cell[0] + 1, cell[1] + 1]];
+        let lat: Vec<P2> = ids.iter().map(|c| l.at(c[0] as f64, c[1] as f64)).collect();
+        let got: Vec<Option<P2>> = ids.iter().map(|c| corner(*c)).collect();
+        let n_got = got.iter().filter(|g| g.is_some()).count();
+        let shift = if n_got > 0 {
+            let s = got.iter().zip(&lat).filter_map(|(g, q)| g.map(|g| crate::geom::sub(g, *q))).fold([0.0, 0.0], crate::geom::add);
+            [s[0] / n_got as f64, s[1] / n_got as f64]
+        } else {
+            [0.0, 0.0]
+        };
+        let pin: Vec<P2> = got.iter().zip(&lat).map(|(g, q)| g.unwrap_or(crate::geom::add(*q, shift))).collect();
+        // lattice fractions (within the cell) -> stage, bilinear between the four corners
+        let at = |fi: f64, fj: f64| -> P2 {
+            let lerp = |a: P2, b: P2, t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            lerp(lerp(pin[0], pin[1], fi), lerp(pin[2], pin[3], fi), fj)
+        };
         let mut filled = 0usize;
         for q in 0..ny {
             for pp in 0..nx {
@@ -100,7 +145,7 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
                 let fx = (pp as f64 + 0.5) / nx as f64;
                 let fy = (q as f64 + 0.5) / ny as f64;
                 let (fi, fj) = o.lat(fx, fy);
-                let s = l.at(cell[0] as f64 + fi, cell[1] as f64 + fj);
+                let s = at(fi, fj);
                 let px = if src.rect.contains(s) {
                     let c = inv.apply(s);
                     src.map.sample(c[0], c[1])
@@ -130,6 +175,9 @@ pub fn cut(src: &Source, l: &Lattice, o: Orient, um_per_px: f64, dir: &Path, pro
 
 /// Lattice point (fractional i, j) -> drawing coordinates (um), screen-like: x right, y up.
 fn cad(l: &Lattice, o: Orient, i: f64, j: f64) -> P2 {
+    if let Some(d) = o.design {
+        return [d[0] + (i - 1.0) * d[2], d[1] + (j - 1.0) * d[3]];
+    }
     let (ph, pv) = o.pitch(l);
     let (u, v) = if o.swap { (j, i) } else { (i, j) };
     [o.sx * u * ph, -o.sy * v * pv]
@@ -189,6 +237,18 @@ pub fn write_dxf(path: &Path, l: &Lattice, o: Orient, layers: &[(String, [u8; 3]
         }
         for j in j0..=j1 + 1 {
             d.line("LATTICE", cad(l, o, i0 as f64, j as f64), cad(l, o, (i1 + 1) as f64, j as f64));
+        }
+        // the drawing's own crosses, to check the overlay against the lithography drawing
+        if o.design.is_some() {
+            d.layer("DRAWING_CROSSES", 3, None);
+            for j in j0..=j1 + 1 {
+                for i in i0..=i1 + 1 {
+                    let c = cad(l, o, i as f64, j as f64);
+                    let r = ph.min(pv) * 0.025;
+                    d.line("DRAWING_CROSSES", [c[0] - r, c[1]], [c[0] + r, c[1]]);
+                    d.line("DRAWING_CROSSES", [c[0], c[1] - r], [c[0], c[1] + r]);
+                }
+            }
         }
         let h = ph.min(pv) * 0.06;
         for c in &cells {
@@ -268,5 +328,73 @@ mod tests {
         write_dxf(&path, &l, o, &[("Flake A".into(), [255, 0, 0], rect, sq)], &rect).unwrap();
         assert!(std::fs::metadata(&path).unwrap().len() > 1000);
         println!("{}", path.display());
+    }
+
+    /// In the drawing's coordinates: the map is turned, scaled 0.3 % and shifted against the stage's lattice,
+    /// yet each cut square has a cross exactly in each corner (the squares go between the crosses found on the
+    /// map), and the drawing puts cross (X, Y) at the drawing's place.
+    #[test]
+    fn squares_between_the_real_crosses() {
+        let umpp = 0.5;
+        let t = 0.4f64.to_radians();
+        let k = 1.003;
+        // map pixel -> where it truly is on the sample (crosses every 100 um at multiples of 100)
+        // and skewed by 2 % (the stage's axes not quite square): no square lattice goes through all the crosses
+        let truth = Affine([umpp * k * t.cos(), -umpp * k * t.sin() + 0.02 * umpp, 7.0, umpp * k * t.sin(), umpp * k * t.cos(), 4.0]);
+        let (w, h) = (900usize, 800usize);
+        let mut map = Rgb::new(w, h);
+        for v in 0..h {
+            for u in 0..w {
+                let mut dark = 0.0f64;
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let s = truth.apply([u as f64 + (sx as f64 + 0.5) / 4.0, v as f64 + (sy as f64 + 0.5) / 4.0]);
+                        let (fx, fy) = (s[0].rem_euclid(100.0), s[1].rem_euclid(100.0));
+                        let near = |f: f64| f < 1.5 || f > 98.5;
+                        let arm = |f: f64| f < 10.0 || f > 90.0;
+                        if (near(fx) && arm(fy)) || (near(fy) && arm(fx)) {
+                            dark += 1.0 / 16.0;
+                        }
+                    }
+                }
+                let o = (v * w + u) * 3;
+                map.px[o..o + 3].copy_from_slice(&[(200.0 - 140.0 * dark).round() as u8; 3]);
+            }
+        }
+        // the map as placed (no turn, no scale): the stage's view of it
+        let placed = Affine([umpp, 0.0, 7.0, 0.0, umpp, 4.0]);
+        // crosses (X, Y) = (2 + i, 3 + j) at (100 i, 100 j), signed by hand where the placed map shows them
+        let mark = |i: i32, j: i32| {
+            let q = truth.inverse().apply([100.0 * i as f64, 100.0 * j as f64]);
+            (placed.apply(q), [2 + i, 3 + j])
+        };
+        let l = Lattice::fit_square(&[mark(1, 1), mark(3, 1), mark(1, 3)]).unwrap();
+        let d = crate::project::Design { name: "t".into(), origin: [-500.0, 300.0], pitch: [100.0, 100.0], n: [30, 30] };
+        let o = Orient::drawing(&d);
+        let dir = std::env::temp_dir().join("mc_export_pin");
+        let _ = std::fs::remove_dir_all(&dir);
+        let rect = Rect { x0: 60.0, y0: 60.0, x1: 380.0, y1: 340.0 };
+        let sq = cut(&Source { rect, map: &map, to_stage: placed, opacity: 1.0 }, &l, o, umpp, &dir, &mut |_, _| {}).unwrap();
+        // a whole square inside: its corner pixels are on the crosses' centres (dark), its middle is not
+        let full: Vec<&Square> = sq.iter().filter(|s| {
+            let c = l.at(s.cell[0] as f64 + 0.5, s.cell[1] as f64 + 0.5);
+            rect.contains(geom_add(c, [-60.0, -60.0])) && rect.contains(geom_add(c, [60.0, 60.0]))
+        }).collect();
+        assert!(!full.is_empty());
+        for s in full {
+            let img = pixels::read_png(&s.file).unwrap();
+            let px = |x: usize, y: usize| img.get(x, y)[0] as i32;
+            let (n0, n1) = (s.px[0] - 1, s.px[1] - 1);
+            for (x, y) in [(0, 0), (n0, 0), (0, n1), (n0, n1)] {
+                assert!(px(x, y) < 120, "corner {x},{y} of {:?}: {}", s.cell, px(x, y));
+            }
+            assert!(px(n0 / 2, n1 / 2) > 190);
+        }
+        // the drawing: cross (X, Y) at the drawing's place
+        assert_eq!(cad(&l, o, 4.0, 5.0), [-500.0 + 300.0, 300.0 + 400.0]);
+    }
+
+    fn geom_add(a: P2, b: P2) -> P2 {
+        [a[0] + b[0], a[1] + b[1]]
     }
 }

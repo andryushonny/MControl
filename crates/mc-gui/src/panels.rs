@@ -356,6 +356,52 @@ pub fn right(app: &mut App, ui: &mut egui::Ui) {
     egui::Panel::right("right").resizable(true).default_size(260.0).show(ui, |ui| {
         ui.heading("Lattice");
         ui.label(RichText::new("Click crosses on a stitched map, then sign each with its numbers (X, Y) from the sample. Once 2 are signed, the lattice and the numbers of all squares follow; 3 and more: fitted.").weak().size(11.5));
+        // the sample's lithography crosses: chosen once, at the start
+        {
+            let designs = crate::project::Design::builtins();
+            let now = app.proj.sample().design.clone();
+            let signed = app.proj.sample().crosses.iter().any(|c| c.label.is_some());
+            ui.horizontal(|ui| {
+                ui.label("Crosses:");
+                let text = now.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "not chosen".into());
+                let mut pick: Option<Option<crate::project::Design>> = None;
+                egui::ComboBox::from_id_salt("design").width(190.0).selected_text(RichText::new(text).color(if now.is_none() { Color32::from_rgb(250, 200, 80) } else { Color32::LIGHT_GRAY })).show_ui(ui, |ui| {
+                    for d in &designs {
+                        if ui.selectable_label(now.as_ref() == Some(d), &d.name).clicked() {
+                            pick = Some(Some(d.clone()));
+                        }
+                    }
+                });
+                if let Some(p) = pick {
+                    if p != now {
+                        if signed && now.is_some() && app.design_confirm != p.as_ref().map(|d| d.name.clone()) {
+                            // changing it later is not wanted: ask once more
+                            app.design_confirm = p.as_ref().map(|d| d.name.clone());
+                            app.message = "the sample's crosses are chosen already and crosses are signed: choose the other once more to change it".into();
+                        } else {
+                            app.design_confirm = None;
+                            let smp = app.proj.sample_mut();
+                            smp.design = p;
+                            let _ = smp.refit();
+                            app.changed();
+                        }
+                    }
+                }
+            });
+            if now.is_none() {
+                ui.label(RichText::new("Choose the sample's crosses first (once): their numbers then give drawing coordinates.").color(Color32::from_rgb(250, 200, 80)).size(11.0));
+            }
+            if let Some(d) = &now {
+                let out: Vec<usize> = app.proj.sample().crosses.iter().enumerate().filter(|(_, c)| c.label.is_some_and(|l| l[0] < 1 || l[1] < 1 || l[0] > d.n[0] || l[1] > d.n[1])).map(|(k, _)| k + 1).collect();
+                if !out.is_empty() {
+                    ui.label(RichText::new(format!("crosses {out:?}: numbers outside 1..{} of this drawing", d.n[0])).color(Color32::from_rgb(240, 90, 70)).size(11.0));
+                }
+                if let Some(l) = &app.proj.sample().lattice {
+                    let p = l.pitch();
+                    ui.label(RichText::new(format!("pitch on the stage {:.3} um (drawing {:.3}): {:+.0} ppm", (p[0] + p[1]) / 2.0, d.pitch[0], ((p[0] + p[1]) / 2.0 / d.pitch[0] - 1.0) * 1e6)).monospace().size(11.0));
+                }
+            }
+        }
         ui.separator();
         let mut remove = None;
         let mut changed = false;
@@ -1292,7 +1338,7 @@ pub fn summary_window(app: &mut App, ctx: &egui::Context) {
             if let (Some(l), Some(sel)) = (app.proj.sample().lattice.clone(), all.iter().find(|a| a.0 == pick).and_then(|a| app.proj.samples.iter().flat_map(|s| s.selections.iter()).find(|s| s.id == a.1)).cloned()) {
                 if sel.best_scan().and_then(|b| b.map.clone()).as_deref() == Some(pick.as_str()) {
                     if let Some((pic, place)) = app.map_of(&sel) {
-                        if let Some(c) = summary::crosses(&l, &sel.rect, pic.pyr.base(), &place) {
+                        if let Some(c) = summary::crosses(&l, &sel.rect, pic.pyr.base(), &place, app.proj.sample().design.as_ref().map(|d| d.pitch)) {
                             v["crosses"] = c;
                             summary::write(&dir, &v);
                         }

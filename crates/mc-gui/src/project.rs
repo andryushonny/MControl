@@ -88,6 +88,9 @@ pub struct Sample {
     /// are aligned onto it)
     #[serde(default)]
     pub lattice_sel: Option<u32>,
+    /// the lithography crosses on this sample (from its drawing): their numbers give exact drawing coordinates
+    #[serde(default)]
+    pub design: Option<Design>,
     /// the view is turned by this much (degrees) so the lattice stands level on the screen
     #[serde(default)]
     pub turn_deg: f64,
@@ -95,7 +98,7 @@ pub struct Sample {
 
 impl Sample {
     pub fn new(name: &str) -> Sample {
-        Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, lattice_sel: None, turn_deg: 0.0 }
+        Sample { name: name.into(), selections: vec![], crosses: vec![], lattice: None, lattice_sel: None, design: None, turn_deg: 0.0 }
     }
 
     /// The box around all selections.
@@ -110,7 +113,9 @@ impl Sample {
             self.lattice = None;
             return Ok(());
         }
-        match Lattice::fit(&marks) {
+        // the drawing's crosses are square: the lattice is too (shift, turn, one pitch; maybe mirrored)
+        let fit = if self.design.is_some() { Lattice::fit_square(&marks) } else { Lattice::fit(&marks) };
+        match fit {
             Ok(l) => {
                 self.lattice = Some(l);
                 Ok(())
@@ -321,4 +326,28 @@ impl Project {
 
 fn focus_window() -> f64 {
     50.0
+}
+
+/// The crosses of a lithography drawing: cross (X, Y), numbered from 1, at origin + ((X - 1) px, (Y - 1) py)
+/// in the drawing's coordinates (um; x right, y up).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Design {
+    pub name: String,
+    pub origin: P2,
+    pub pitch: P2,
+    pub n: [i32; 2],
+}
+
+impl Design {
+    pub fn at(&self, x: f64, y: f64) -> P2 {
+        [self.origin[0] + (x - 1.0) * self.pitch[0], self.origin[1] + (y - 1.0) * self.pitch[1]]
+    }
+
+    /// The layouts in use (from opt_7x7_with_el_lit_1.dxf and el_lit_mark.dxf).
+    pub fn builtins() -> Vec<Design> {
+        vec![
+            Design { name: "Optical 30 x 30, 200 um (opt_7x7)".into(), origin: [-3372.4, -3364.48], pitch: [200.0, 200.0], n: [30, 30] },
+            Design { name: "E-beam 56 x 56, 90 um (el_lit_mark)".into(), origin: [-2528.144, -2436.398], pitch: [90.0, 90.0], n: [56, 56] },
+        ]
+    }
 }

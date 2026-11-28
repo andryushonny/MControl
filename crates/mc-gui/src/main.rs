@@ -156,6 +156,8 @@ pub struct App {
     /// a flat field being taken
     pub flat_job: Option<Arc<Mutex<flat::Job>>>,
     pub summary_open: bool,
+    /// a change of the sample's crosses waiting for a second choice
+    pub design_confirm: Option<String>,
     /// the stitch shown in Summary (its map folder, relative)
     pub summary_pick: Option<String>,
     pub settings_open: bool,
@@ -238,6 +240,7 @@ impl App {
             corner_shown: false,
             arrows_move_stage: stored("arrows_move_stage").as_deref() == Some("true"),
             summary_open: false,
+            design_confirm: None,
             summary_pick: None,
             settings_open: false,
             frame_no: 0,
@@ -947,7 +950,11 @@ impl App {
             self.message = "mark at least 2 crosses first (Lattice tool)".into();
             return;
         };
-        let orient = export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, self.view_turn());
+        // with the sample's drawing chosen: in the drawing's coordinates (X right, Y up, crosses at their places)
+        let orient = match &sample.design {
+            Some(d) => export::Orient::drawing(d),
+            None => export::Orient::of(&lat, self.flip_x, self.flip_y, self.swap, self.view_turn()),
+        };
         // what to cut: selections marked "cut" that have a map, top of the list first
         let mut items = vec![];
         let mut skipped = vec![];
