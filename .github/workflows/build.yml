@@ -46,7 +46,7 @@ jobs:
   # a new version in Cargo.toml on main: tag it and publish a release with the Windows exes
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [windows, linux]
+    needs: [windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
